@@ -23,3 +23,6 @@ vorher Teil von DSS-PMS (`mcp_server.py`, `services/in_mcp_tools.py`, bis Commit
   `tax_id` = Steuerkategorie, Schreibaufrufe mit `Accept: application/json`, `status_id` ist ein String
 - Spec und Plan liegen in DSS-PMS: `docs/superpowers/specs/2026-09-23-in-mcp-eigenes-repo-design.md`,
   `docs/superpowers/plans/2026-09-23-in-mcp-eigenes-repo.md`
+- **Öffentliche Fassung:** `github.com/DSS-AI/invoice-ninja-mcp` (MIT, eigene Historie). Übertrag nur mit
+  `scripts/veroeffentlichen.sh` (prüft auf interne Angaben, fragt vor dem Push; das Skript ist nur im
+  Arbeits-Repo vorhanden). Nie die Historie dieses Repos ins öffentliche pushen
