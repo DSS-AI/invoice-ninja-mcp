@@ -21,6 +21,30 @@ vorher Teil von DSS-PMS (`mcp_server.py`, `services/in_mcp_tools.py`, bis Commit
   meist erst nach einem eigenen Neustart, manche cachen `.env` beim eigenen Start
 - IN-Gotchas (gelten für jedes IN): Client-PUT ersetzt die Kontaktliste, MwSt. je Position,
   `tax_id` = Steuerkategorie, Schreibaufrufe mit `Accept: application/json`, `status_id` ist ein String
+- **Tool-Zahl:** `LESE_TOOLS` 14 (ohne `PMS_DB_PATH` 13), `SCHREIB_TOOLS` 7, `RECHNUNGS_TOOLS` 8
+  (`schreiben` 4, `status` 2, `versenden` 1, `stornieren` 1). Also 20 bis 29, DSS-Referenz 29.
+  README (DE + EN) nennt die Zahlen; bei neuen Tools dort und in `anweisungen()` nachziehen.
+  `destructiveHint: false` nur für `ADDITIV_TOOLS` (Angebots-/Rechnungsentwurf anlegen, umwandeln)
+- **Rechte-Block `rechnungen:`** in instanz.yaml (`schreiben`, `status`, `versenden`,
+  `stornieren`, Default alle `false`, nur bool). `baue_mcp()` registriert ein Rechnungs-Tool nur mit
+  `k.rechnungen_erlaubt(recht)`, Zuordnung in `RECHNUNGS_TOOLS`. `anweisungen()` nennt die
+  freigeschalteten Rechte
+- **Verkaufsbedingungen (VKB), Regeln 1-5** in `tools.py` (`_vkb_keys`, `_positionen_bauen`,
+  `_vkb_setzen`), nur für die Angebots-Tools: 1) erkannt werden `angebot.verkaufsbedingungen` plus
+  Katalog-Keys passend zu `verkaufsbedingungen_muster` (`re.search`, case-sensitiv), Positionen
+  case-insensitiv zugeordnet; 2) VKB in `positionen` gewinnt (eigener Text bleibt, ans Ende, `fest`),
+  Parameter-Widerspruch nur als Hinweis; 3) Parameter = erkannter Key oder `keine`, leer = bisherige
+  (letzte) bzw. Standard; 4) mehr als eine VKB in `positionen` = Fehler ohne Schreibaufruf;
+  5) Rückmeldung nennt VKB und Herkunft. Weder Liste noch Muster: Argument ausgeblendet, keine Logik.
+  Rechnungen: VKB ist eine normale Position, nichts wird angehängt
+- **Rechnungen und GoBD:** Nummer wird beim Anlegen/Umwandeln vergeben, deshalb nie löschen,
+  falsche Rechnung stornieren. Ändern nur bei Status 1 und nicht archiviert
+  (`_rechnungsentwurf_pruefen`), auch wenn IN mehr erlaubt. Vor jeder Änderung frisch lesen
+  (`_rechnung_frisch`). Storno setzt nur Status 5, keine Gutschrift. Versand geht in die
+  IN-Mailwarteschlange (Antwort = angenommen, nicht zugestellt), IN wählt die Vorlage. Umwandeln
+  gesperrt nur bei `invoice_id` gesetzt oder Status -1. Nur Als-versendet-Markieren und Storno prüfen
+  den Status danach erneut. Live-Tests nur lesend, weil jede angelegte Rechnung eine Nummer verbraucht
+- Optionale Positionen: IN 5.13 hat kein Feld dafür, nicht umsetzbar
 - Spec und Plan liegen in DSS-PMS: `docs/superpowers/specs/2026-09-23-in-mcp-eigenes-repo-design.md`,
   `docs/superpowers/plans/2026-09-23-in-mcp-eigenes-repo.md`
 - **Öffentliche Fassung:** `github.com/DSS-AI/invoice-ninja-mcp` (MIT, eigene Historie). Übertrag nur mit

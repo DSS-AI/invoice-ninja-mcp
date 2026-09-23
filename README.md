@@ -2,14 +2,36 @@
 
 *English version: [README.en.md](README.en.md)*
 
-MCP-Server für Invoice Ninja v5. Er gibt Claude Desktop und anderen MCP-Clients 19 oder 20 Tools:
-13 oder 14 zum Lesen und 6 zum Schreiben. Geschrieben werden nur Ansprechpartner, einzelne
-Stammdatenfelder von Kunden, Notizen an Angeboten und Projekten, Angebotsentwürfe und der
-Produktkatalog. Was der Server nicht kann, steht unter
+> Das Projekt ist noch in Entwicklung, läuft aber bereits sehr zuverlässig: Wir setzen es
+> produktiv mit dem Agenten Hermes und der Claude-Desktop-App ein.
+
+MCP-Server für Invoice Ninja v5. Er gibt Claude Desktop und anderen MCP-Clients zwischen 20 und 29
+Tools: 13 oder 14 zum Lesen, 7 zum Schreiben und bis zu 8 für Rechnungen, je nachdem, welche
+Rechte in `instanz.yaml` freigeschaltet sind. Geschrieben werden Ansprechpartner, einzelne
+Stammdatenfelder von Kunden, Notizen an Angeboten und Projekten, Angebotsentwürfe, der
+Produktkatalog und, wenn freigeschaltet, Rechnungen. Was der Server nicht kann, steht unter
 [Was der MCP bewusst nicht kann](#was-der-mcp-bewusst-nicht-kann).
 
 Betreiber: Dokumentations Service Siegmund GmbH. Derselbe Code läuft bei DSS und bei Kunden. Die
 Unterschiede stehen ausschließlich in `.env` und `instanz.yaml`.
+
+## Schnellstart mit Claude Code
+
+Am einfachsten richten Sie den Server ein, indem Sie dieses Repository an Claude Code (die
+Kommandozeilen-Version) geben und es bitten, den Server mit Ihrer Invoice-Ninja-Instanz zu
+verbinden. Lassen Sie Claude Code dafür am besten auf demselben Rechner oder Server laufen wie
+Invoice Ninja. Dort kann es Docker, das Netzwerk und das API-Token direkt prüfen. Ein möglicher
+Auftrag:
+
+```
+Richte diesen MCP-Server für meine Invoice-Ninja-Instanz ein: .env und instanz.yaml anlegen,
+Custom Fields über die API auslesen und Rollen vorschlagen, Container starten und mit einem
+Lesetool testen.
+```
+
+Prüfen Sie das API-Token und die vorgeschlagenen Rollen selbst, bevor der Container startet. Die
+Rechnungsrechte (siehe [instanz.yaml](#instanzyaml)) sollten Sie nur freischalten, wenn Sie sie
+wirklich brauchen. Die Schritte im Einzelnen stehen im nächsten Abschnitt.
 
 ## Installation beim Kunden
 
@@ -89,22 +111,27 @@ vergeben.
 | `kontakt.anrede` | Argument `anrede` in `kontakt_speichern`, dann Pflicht mit dem Wert `Herr` oder `Frau`, beim Anlegen und beim Ändern. Ausgabe `anrede` je Ansprechpartner. Die Server-Hinweise nennen die Pflicht |
 | `kontakt.mobil`, `.position`, `.abteilung` | gleichnamige Argumente in `kontakt_speichern` und Ausgabe je Ansprechpartner in `kunde_lesen` |
 | `angebot.projektnummer` | Ausgabe `projektnummer`. Der MCP schreibt das Feld nie |
-| `angebot.bezeichnung` | Ausgabe `bezeichnung`, durchsucht von `angebote_suchen(text)`. Argument `bezeichnung` in `angebotsentwurf_anlegen`, dann Pflicht und in dieses Feld geschrieben |
-| `angebot.bestellt` | Ausgabe `bestellt` (true/false), Filter `bestellt` in `angebote_suchen`, Sperre für `angebotsentwurf_positionen_setzen`. Der MCP schreibt das Feld nie |
-| `angebot.abgeschlossen` | Ausgabe `abgeschlossen` (true/false), Sperre für `angebotsentwurf_positionen_setzen`. Kein Suchfilter. Der MCP schreibt das Feld nie |
-| `rechnung.projektnummer`, `.projektbezeichnung` | Ausgabe in `rechnungen_suchen` und `rechnung_lesen` |
-| `projekt.projektnummer` | Ausgabe `projektnummer`, Projektschlüssel für `projekt_lesen`, `notiz_setzen` und `in_rohdaten(projekt)`, durchsucht von `projekte_suchen(text)`, Sortierung der Suchergebnisse |
+| `angebot.bezeichnung` | Ausgabe `bezeichnung`, durchsucht von `angebote_suchen(text)`. Argument `bezeichnung` in `angebotsentwurf_anlegen`, dann Pflicht und in dieses Feld geschrieben, und in `angebotsentwurf_kopf_setzen` |
+| `angebot.bestellt` | Ausgabe `bestellt` (true/false), Filter `bestellt` in `angebote_suchen`, Sperre für `angebotsentwurf_positionen_setzen` und `angebotsentwurf_kopf_setzen`. Der MCP schreibt das Feld nie |
+| `angebot.abgeschlossen` | Ausgabe `abgeschlossen` (true/false), Sperre für `angebotsentwurf_positionen_setzen` und `angebotsentwurf_kopf_setzen`. Kein Suchfilter. Der MCP schreibt das Feld nie |
+| `rechnung.projektnummer`, `.projektbezeichnung` | Ausgabe in `rechnungen_suchen` und `rechnung_lesen`. `rechnungsentwurf_anlegen` mit Argument `projekt` schreibt Projektnummer und Projektname des Projekts in diese Felder |
+| `projekt.projektnummer` | Ausgabe `projektnummer`, Projektschlüssel für `projekt_lesen`, `notiz_setzen`, `rechnungsentwurf_anlegen` und `in_rohdaten(projekt)`, durchsucht von `projekte_suchen(text)`, Sortierung der Suchergebnisse |
 | `projekt.name` | Quelle für `projektname`, ohne Rolle gilt das IN-Feld `name` |
 | `projekt.abgeschlossen` | Ausgabe `abgeschlossen` (true/false), Filter `abgeschlossen` in `projekte_suchen`. Der MCP schreibt das Feld nie |
 | `projekt.notiz` | Ausgabe `notiz`, Ziel von `notiz_setzen` für Projekte. Ohne Rolle schreibt `notiz_setzen` in die private Notiz des Projekts |
 
 Angebotsregeln im Abschnitt `angebot:`:
 
-- `verkaufsbedingungen`: Liste von Produkt-Keys. Genau einer davon wird als letzte Position an
-  jeden Entwurf gehängt. Leer oder fehlend heißt: keine Verkaufsbedingungen, das Argument
-  `verkaufsbedingungen` wird ausgeblendet.
+- `verkaufsbedingungen`: Liste von Produkt-Keys, die als Verkaufsbedingungen gelten. Höchstens
+  eine davon steht als letzte Position in einem Angebot (siehe
+  [Verkaufsbedingungen](#verkaufsbedingungen)).
+- `verkaufsbedingungen_muster`: regulärer Ausdruck. Jeder Produkt-Key im Katalog, auf den er
+  passt, gilt zusätzlich als Verkaufsbedingung (`re.search`, Groß- und Kleinschreibung zählt). So
+  werden neue Verkaufsbedingungen erkannt, ohne dass `instanz.yaml` angepasst werden muss. Ein
+  ungültiger Ausdruck verhindert den Start. Sind weder Liste noch Muster gesetzt, kennt die
+  Instanz keine Verkaufsbedingungen, und das Argument `verkaufsbedingungen` wird ausgeblendet.
 - `standard_verkaufsbedingungen`: welcher Key ohne Angabe gilt. Muss in der Liste stehen. Standard
-  ist der erste Listeneintrag.
+  ist der erste Listeneintrag. Ohne Liste gibt es keinen Standard.
 - `individuell_produkt`: Produkt-Key, dessen Positionen einen nicht leeren Text (eigener oder Katalogtext) und
   einen Preis über 0 brauchen. Leer heißt: keine Sonderprüfung.
 - `gueltig_standard_tage`, `gueltig_min_tage`, `gueltig_max_tage`: Gültigkeit neuer Entwürfe in
@@ -117,10 +144,30 @@ Angebotsregeln im Abschnitt `angebot:`:
 Im Abschnitt `produkt:` legt `neue_steuerkategorie` die Invoice-Ninja-Steuerkategorie (`tax_id`)
 neu angelegter Produkte fest: 1 Ware, 2 Dienstleistung (Standard), 3 Digital.
 
+Der Abschnitt `rechnungen:` schaltet die Rechnungs-Tools frei. Er hat vier Schalter, jeder ist
+ohne Angabe `false`. Ein Wert, der nicht `true` oder `false` ist, verhindert den Start. Ein Tool
+ohne Recht wird gar nicht registriert, der MCP-Client sieht es also nicht.
+
+| Schlüssel | Tools |
+|---|---|
+| `schreiben` | `rechnungsentwurf_anlegen`, `rechnungsentwurf_positionen_setzen`, `rechnungsentwurf_kopf_setzen`, `angebot_in_rechnung_umwandeln` |
+| `status` | `rechnung_als_versendet_markieren`, `rechnung_zahlung_erfassen` |
+| `versenden` | `rechnung_versenden` |
+| `stornieren` | `rechnung_stornieren` |
+
+```yaml
+rechnungen:
+  schreiben: true
+  status: false
+  versenden: false
+  stornieren: false
+```
+
 Im Abschnitt `instanz:` stehen `name` und `hinweise`. Beide gehen in die Server-Hinweise
 (MCP-Instructions), die der Client beim Verbindungsaufbau erhält: „Zugriff auf das Invoice Ninja
-von <name> …", dazu Verkaufsbedingungen, Gültigkeitsgrenzen, gegebenenfalls die Anredepflicht und
-zuletzt der Text aus `hinweise`.
+von <name> …“, dazu Verkaufsbedingungen, Gültigkeitsgrenzen, gegebenenfalls die Anredepflicht, die
+freigeschalteten Rechnungsrechte mit dem Hinweis, dass nur Entwürfe änderbar sind und Rechnungen
+nie gelöscht werden, und zuletzt der Text aus `hinweise`.
 
 Fehlt die Datei oder ist sie fehlerhaft, startet der Server nicht. Die Meldung nennt den
 betroffenen Schlüssel. Geprüft werden unter anderem unbekannte Schlüssel, Felder außerhalb von
@@ -158,27 +205,42 @@ in `beispiele/instanz.dss.yaml`, die Beschriftungen sind die in Invoice Ninja ei
 
 Angebotsregeln derselben Datei:
 
-- Verkaufsbedingungen `VKBMA` und `AKAllg`, Standard `VKBMA`
+- Verkaufsbedingungen `VKBMA` und `AKAllg`, Standard `VKBMA`. Dazu das Muster `^VKB`: Jedes
+  Katalogprodukt, dessen Key mit `VKB` beginnt, gilt ebenfalls als Verkaufsbedingung
 - `IndLeist` ist das Produkt für individuelle Leistungen, es braucht Text und Preis
 - Entwürfe sind mindestens 14 und höchstens 60 Tage gültig, ohne Angabe 14 Tage
 - Das Muster `AG\d+` liest die Angebotsnummer aus dem Projektnamen in Invoice Ninja
 - Neue Produkte bekommen die Steuerkategorie 2 (Dienstleistung)
+- Alle vier Rechnungsrechte sind freigeschaltet (`schreiben`, `status`, `versenden`,
+  `stornieren`)
 
 ## Tools
 
-20 Tools (14 lesend, 6 schreibend), registriert in `in_mcp/server.py`. Tool-Namen, Argumentnamen und
-alle Meldungen sind deutsch, daran ändert `instanz.yaml` nichts.
+Bis zu 29 Tools, registriert in `in_mcp/server.py`: 14 lesende, 7 schreibende und 8
+Rechnungs-Tools. Tool-Namen, Argumentnamen und alle Meldungen sind deutsch, daran ändert
+`instanz.yaml` nichts.
+
+Wie viele Tools ein Client sieht, hängt von der Konfiguration ab:
+
+| Konfiguration | Tools |
+|---|---|
+| ohne PMS-Anbindung, ohne Rechnungsrechte | 20 (13 lesend, 7 schreibend) |
+| mit PMS-Anbindung, ohne Rechnungsrechte | 21 |
+| je Rechnungsrecht zusätzlich | `schreiben` 4, `status` 2, `versenden` 1, `stornieren` 1 |
+| mit PMS-Anbindung und allen Rechnungsrechten (so bei DSS) | 29 |
 
 Manche Argumente erscheinen nur, wenn die passende Rolle in `instanz.yaml` zugeordnet ist. Ohne
 Rolle blendet der Server sie aus (`versteckte_argumente()` in `server.py`), weil sie ohne das
 zugehörige Custom Field keine Wirkung hätten. Diese Argumente sind unten mit † markiert. Das Tool
 `angebot_vorlagen_auflisten` wird nur registriert, wenn `PMS_DB_PATH` gesetzt ist (siehe
-[Optionale PMS-Anbindung](#optionale-pms-anbindung)), sonst sind es 19 Tools.
+[Optionale PMS-Anbindung](#optionale-pms-anbindung)). Die Rechnungs-Tools werden nur registriert,
+wenn das passende Recht im Abschnitt `rechnungen:` freigeschaltet ist.
 
-Annotationen: Lese-Tools tragen `readOnlyHint: true`. `angebotsentwurf_anlegen` legt nur neu an und
-trägt `destructiveHint: false`. Die übrigen fünf Schreib-Tools können bestehende Daten
-überschreiben und tragen `destructiveHint: true`. MCP-Clients entscheiden damit, wie nachdrücklich
-sie einen Aufruf bestätigen lassen.
+Annotationen: Lese-Tools tragen `readOnlyHint: true`. `angebotsentwurf_anlegen`,
+`rechnungsentwurf_anlegen` und `angebot_in_rechnung_umwandeln` legen nur neu an und tragen
+`destructiveHint: false`. Alle übrigen Schreib- und Rechnungs-Tools können bestehende Daten
+überschreiben oder wirken nach außen und tragen `destructiveHint: true`. MCP-Clients entscheiden
+damit, wie nachdrücklich sie einen Aufruf bestätigen lassen.
 
 Grenzen beim Lesen: Der Server holt je Objektart eine Seite mit höchstens 500 Datensätzen aus
 Invoice Ninja und sucht darin lokal. Bei Rechnungen und Zahlungen sind das die 500 neuesten nach
@@ -354,10 +416,10 @@ eindeutige Angabe, zum Beispiel die IN-ID des Projekts. `destructiveHint: true`.
 Legt ein Angebot im Status Entwurf an. Es wird weder versendet noch als versendet markiert. Datum
 ist heute, Empfänger sind die angegebenen Ansprechpartner. Custom Fields setzt das Tool keine außer
 der Bezeichnung (Rolle `angebot.bezeichnung`). Design, Standardtexte und Fußzeile kommen aus
-Invoice Ninja. Die MwSt. jeder Position kommt aus dem Katalog. Positionen mit einem Key aus
-`verkaufsbedingungen` überspringt das Tool und hängt stattdessen genau eine Verkaufsbedingung ans
-Ende. Die Antwort nennt Nummer, Netto, Brutto und Gültigkeit. Mit PMS-Anbindung wird der Entwurf
-in `angebot_log` eingetragen. `destructiveHint: false`.
+Invoice Ninja. Die MwSt. jeder Position kommt aus dem Katalog. Verkaufsbedingungen setzt das Tool
+nach den Regeln unter [Verkaufsbedingungen](#verkaufsbedingungen). Die Antwort nennt Nummer,
+Netto, Brutto, Gültigkeit und die gesetzte Verkaufsbedingung mit ihrer Herkunft. Mit
+PMS-Anbindung wird der Entwurf in `angebot_log` eingetragen. `destructiveHint: false`.
 - `kunde` (str, Pflicht): Kundennummer, IN-ID oder Mandant-Nr. (mit Rolle)
 - `kontakt_emails` (list[str], Pflicht): jede Adresse muss zu einem Ansprechpartner des Kunden
   gehören, sonst lehnt das Tool ab
@@ -371,8 +433,9 @@ in `angebot_log` eingetragen. `destructiveHint: false`.
   Aufzählungszeichen und doppelte Leerzeichen entfernt das Tool
 - `gueltig_bis` (str, optional): `JJJJ-MM-TT`, ohne Angabe heute plus `gueltig_standard_tage`. Muss
   zwischen heute plus `gueltig_min_tage` und heute plus `gueltig_max_tage` liegen
-- `verkaufsbedingungen` (str, optional) †: nur wenn `angebot.verkaufsbedingungen` konfiguriert ist.
-  Einer der konfigurierten Keys, ohne Angabe `standard_verkaufsbedingungen`
+- `verkaufsbedingungen` (str, optional) †: nur wenn `angebot.verkaufsbedingungen` oder
+  `verkaufsbedingungen_muster` konfiguriert ist. Ein als Verkaufsbedingung erkannter Key oder
+  `keine`, ohne Angabe `standard_verkaufsbedingungen`
 
 **`angebotsentwurf_positionen_setzen(angebotsnr, positionen, verkaufsbedingungen)`**
 Ersetzt alle Positionen eines Angebots. Erlaubt nur bei Status Entwurf und nicht archiviert, mit
@@ -385,9 +448,23 @@ unverändert. Die Antwort nennt Netto und Brutto vorher und nachher. `destructiv
 - `angebotsnr` (str, Pflicht)
 - `positionen` (list[dict], Pflicht): wie bei `angebotsentwurf_anlegen`. Ohne `text` gilt der
   Katalogtext, eigene Texte also immer mitschicken
-- `verkaufsbedingungen` (str) †: nur wenn `angebot.verkaufsbedingungen` konfiguriert ist. Ohne
-  Angabe bleibt die bisherige Verkaufsbedingung des Angebots, fehlt sie, gilt
+- `verkaufsbedingungen` (str, optional) †: nur wenn `angebot.verkaufsbedingungen` oder
+  `verkaufsbedingungen_muster` konfiguriert ist. Ein als Verkaufsbedingung erkannter Key oder
+  `keine`. Ohne Angabe bleibt die bisherige Verkaufsbedingung des Angebots, fehlt sie, gilt
   `standard_verkaufsbedingungen`
+
+**`angebotsentwurf_kopf_setzen(angebotsnr, gueltig_bis, bezeichnung, oeffentliche_notiz)`**
+Ändert Kopfdaten eines Angebots. Es gelten dieselben Sperren wie bei
+`angebotsentwurf_positionen_setzen`: nur Status Entwurf, nicht archiviert, mit den Rollen
+`angebot.bestellt` und `angebot.abgeschlossen` außerdem nur, wenn keiner der beiden Schalter
+gesetzt ist. Mindestens ein Feld ist Pflicht, nicht angegebene Felder bleiben unverändert. Die
+Antwort nennt die geänderten Felder. `destructiveHint: true`.
+- `angebotsnr` (str, Pflicht)
+- `gueltig_bis` (str, optional): `JJJJ-MM-TT`, zwischen heute plus `gueltig_min_tage` und heute
+  plus `gueltig_max_tage`
+- `bezeichnung` (str, optional) †: nur mit Rolle `angebot.bezeichnung`. Bereinigt wie beim Anlegen,
+  darf nicht leer sein
+- `oeffentliche_notiz` (str, optional): öffentliche Notiz des Angebots, ein leerer Text löscht sie
 
 **`produkt_speichern(produkt, text, preis, mwst)`**
 Ändert ein aktives Katalogprodukt oder legt ein neues an. Beim Ändern bleiben nicht angegebene
@@ -404,23 +481,159 @@ Bestehende Angebote ändern sich nicht, ein Entwurf übernimmt neue Katalogwerte
 - `mwst` (str, optional): Name oder Satz eines aktiven Steuersatzes in Invoice Ninja (z. B. `MwSt.`
   oder `19`), muss eindeutig sein. Beim Neuanlegen Pflicht
 
+### Verkaufsbedingungen
+
+Verkaufsbedingungen sind Katalogprodukte, die als eigene Position am Ende eines Angebots stehen.
+Für `angebotsentwurf_anlegen` und `angebotsentwurf_positionen_setzen` gelten fünf Regeln. Kennt
+die Instanz keine Verkaufsbedingungen (weder `verkaufsbedingungen` noch
+`verkaufsbedingungen_muster` gesetzt), entfällt alles Folgende.
+
+1. **Erkennung:** Als Verkaufsbedingung gilt jeder Key aus `angebot.verkaufsbedingungen` und jeder
+   Katalog-Key, auf den `verkaufsbedingungen_muster` passt. Positionen werden diesen Keys ohne
+   Unterscheidung von Groß- und Kleinschreibung zugeordnet.
+2. **Eine übergebene Position hat Vorrang.** Steht eine Verkaufsbedingung in `positionen`, hängt
+   das Tool keine weitere an. Es stellt die übergebene ans Ende und übernimmt ihren `text`, ohne
+   `text` gilt der Katalogtext. Nennt der Parameter `verkaufsbedingungen` etwas anderes, gilt
+   trotzdem die Position, und die Antwort weist darauf hin, dass der Parameter ignoriert wurde.
+3. **Parameter `verkaufsbedingungen`:** jeder nach Regel 1 erkannte Key oder `keine`. Mit `keine`
+   bekommt das Angebot keine Verkaufsbedingung, auch die bisherige entfällt. Ohne Angabe behält
+   `angebotsentwurf_positionen_setzen` die bisherige Verkaufsbedingung des Angebots (bei mehreren
+   die letzte), gibt es keine, gilt `standard_verkaufsbedingungen`. `angebotsentwurf_anlegen` nimmt
+   ohne Angabe den Standard. Einen unbekannten Key lehnt das Tool ab und nennt die erkannten Keys.
+   Gibt es keinen Standard (nur ein Muster, keine Liste) und greift keine andere Quelle, lehnt das
+   Tool mit „Die Verkaufsbedingungen fehlen.“ ab.
+4. **Höchstens eine Verkaufsbedingung je Angebot.** Stehen mehrere in `positionen`, lehnt das Tool
+   ab und schreibt nichts.
+5. **Die Antwort nennt die gesetzte Verkaufsbedingung und ihre Herkunft:** aus der Positionsliste
+   (eigener Text oder Katalogtext), bisherige des Angebots, Parameter, Standard oder „keine
+   Verkaufsbedingungen“.
+
+Die Preisprüfung (Preis 0 bei Katalogpreis ungleich 0) gilt für Verkaufsbedingungen nicht. Die
+Rechnungs-Tools kennen diese Regeln nicht: Dort ist eine Verkaufsbedingung eine normale Position
+an der übergebenen Stelle, und es wird nichts angehängt.
+
+### Rechnungs-Tools
+
+Diese Tools gibt es nur, wenn das jeweilige Recht im Abschnitt `rechnungen:` der `instanz.yaml`
+freigeschaltet ist (siehe [instanz.yaml](#instanzyaml)). Für alle gilt:
+
+- **Die Rechnungsnummer wird beim Anlegen vergeben**, auch beim Umwandeln eines Angebots. Der MCP
+  löscht deshalb keine Rechnung. Eine falsche Rechnung wird storniert. Die Tool-Beschreibungen
+  weisen den Client an, Rechnungen nur auf ausdrücklichen Wunsch anzulegen.
+- **Nur Entwürfe sind änderbar** (Status Entwurf, nicht archiviert). Das gilt auch dann, wenn
+  Invoice Ninja selbst Änderungen an versendeten Rechnungen zulassen würde. Hintergrund sind die
+  GoBD: Eine versendete Rechnung wird nicht mehr verändert, sondern bei Bedarf storniert.
+- Rechnungen werden per Rechnungsnummer unter den 500 neuesten gesucht und vor jeder Änderung
+  frisch aus Invoice Ninja gelesen. Alle Sperren prüfen diesen aktuellen Stand. Gelöschte
+  Rechnungen werden abgelehnt.
+- Positionen funktionieren wie bei Angeboten (Katalog, MwSt. aus dem Katalog, Preisprüfung,
+  `individuell_produkt`), aber ohne die Regeln für Verkaufsbedingungen.
+
+**`rechnungsentwurf_anlegen(kunde, positionen, kontakt_emails, projekt, bestellnummer, datum, faellig, oeffentliche_notiz)`**
+Recht `schreiben`. Legt eine Rechnung im Status Entwurf an, sie wird nicht versendet. Die Antwort
+nennt Nummer, Netto und Brutto und erinnert daran, dass die Nummer vergeben ist.
+`destructiveHint: false`.
+- `kunde` (str, Pflicht): Kundennummer, IN-ID oder Mandant-Nr. (mit Rolle)
+- `positionen` (list[dict], Pflicht): wie bei `angebotsentwurf_anlegen`, alle Positionen in der
+  übergebenen Reihenfolge
+- `kontakt_emails` (list[str], optional): Empfänger. Jede Adresse muss zu einem Ansprechpartner
+  des Kunden gehören. Leer heißt: Empfänger nach Standard von Invoice Ninja
+- `projekt` (str, optional): Projektnummer (mit Rolle), IN-Nummer oder IN-ID eines Projekts
+  desselben Kunden. Verknüpft die Rechnung mit dem Projekt und füllt, mit den Rollen
+  `rechnung.projektnummer` und `rechnung.projektbezeichnung`, auch diese Felder
+- `bestellnummer` (str, optional)
+- `datum`, `faellig` (str, optional): `JJJJ-MM-TT`, leer heißt Standard von Invoice Ninja. Die
+  Fälligkeit darf nicht vor dem Rechnungsdatum liegen
+- `oeffentliche_notiz` (str, optional)
+
+**`rechnungsentwurf_positionen_setzen(rechnungsnr, positionen)`**
+Recht `schreiben`. Ersetzt alle Positionen eines Rechnungsentwurfs. Die übergebene Liste ist die
+komplette neue Liste, was fehlt, wird entfernt. Vorher `rechnung_lesen` aufrufen. Ohne `text` gilt
+der Katalogtext, Rabatte und Zusatzfelder einzelner Positionen gehen verloren. Die Antwort nennt
+Netto und Brutto vorher und nachher. `destructiveHint: true`.
+- `rechnungsnr` (str, Pflicht)
+- `positionen` (list[dict], Pflicht): wie bei `rechnungsentwurf_anlegen`
+
+**`rechnungsentwurf_kopf_setzen(rechnungsnr, datum, faellig, bestellnummer, oeffentliche_notiz, private_notiz)`**
+Recht `schreiben`. Ändert Kopfdaten eines Rechnungsentwurfs. Mindestens ein Feld ist Pflicht,
+nicht angegebene Felder bleiben unverändert, ein leerer Text leert das Feld. Die Fälligkeit darf
+nicht vor dem Rechnungsdatum liegen, geprüft auch gegen den gespeicherten Wert.
+`destructiveHint: true`.
+- `rechnungsnr` (str, Pflicht)
+- `datum`, `faellig` (str, optional): `JJJJ-MM-TT`
+- `bestellnummer`, `oeffentliche_notiz`, `private_notiz` (str, optional)
+
+**`angebot_in_rechnung_umwandeln(angebotsnr)`**
+Recht `schreiben`. Wandelt ein Angebot in einen Rechnungsentwurf um. Das geht mit jedem Angebot,
+auch mit einem nicht bestellten, außer es ist schon umgewandelt (die Meldung nennt dann die
+Rechnung) oder abgelaufen (dann zuerst in Invoice Ninja die Gültigkeit verlängern). Positionen,
+Projekt, Bestellnummer und Zusatzfelder übernimmt Invoice Ninja. Danach liest das Tool das Angebot
+erneut und meldet einen Fehler, wenn Invoice Ninja die Umwandlung nicht bestätigt. Die Antwort
+nennt Rechnungsnummer, Netto und Brutto. `destructiveHint: false`.
+- `angebotsnr` (str, Pflicht)
+
+**`rechnung_als_versendet_markieren(rechnungsnr)`**
+Recht `status`. Setzt einen Rechnungsentwurf auf versendet, ohne E-Mail, etwa für Rechnungen, die
+auf anderem Weg verschickt wurden. Danach ist die Rechnung im MCP gesperrt. Das Tool liest den
+Status danach erneut und meldet einen Fehler, wenn er sich nicht geändert hat.
+`destructiveHint: true`.
+- `rechnungsnr` (str, Pflicht)
+
+**`rechnung_zahlung_erfassen(rechnungsnr, betrag, datum, referenz)`**
+Recht `status`. Erfasst eine Zahlung zu einer versendeten oder teilbezahlten Rechnung mit offenem
+Betrag. Die Antwort nennt den Restbetrag. `destructiveHint: true`.
+- `rechnungsnr` (str, Pflicht)
+- `betrag` (float, optional): brutto, über 0, höchstens der offene Betrag, höchstens zwei
+  Nachkommastellen. Ohne Angabe der gesamte offene Betrag
+- `datum` (str, optional): `JJJJ-MM-TT`, ohne Angabe heute
+- `referenz` (str, optional): z. B. Verwendungszweck oder Buchungsreferenz
+
+**`rechnung_versenden(rechnungsnr)`**
+Recht `versenden`. Übergibt die Rechnung an Invoice Ninja zum Versand per E-Mail an alle
+Empfänger der Rechnung. Die Vorlage wählt Invoice Ninja, bei überfälligen Rechnungen
+gegebenenfalls eine Mahnvorlage. Ein Entwurf wird dabei auf versendet gesetzt. Abgelehnt werden
+stornierte, zurückerstattete und archivierte Rechnungen sowie Rechnungen ohne Empfänger mit
+E-Mail-Adresse. Invoice Ninja verschickt über eine Warteschlange: Die Antwort heißt, dass Invoice
+Ninja den Auftrag angenommen hat, nicht, dass die Mail zugestellt ist. Ob sie angekommen ist,
+zeigt der Verlauf der Rechnung in Invoice Ninja. Die Antwort nennt die Empfänger.
+`destructiveHint: true`.
+- `rechnungsnr` (str, Pflicht)
+
+**`rechnung_stornieren(rechnungsnr)`**
+Recht `stornieren`. Storniert eine versendete oder teilbezahlte Rechnung, Entwürfe und bezahlte
+Rechnungen nicht. Das Tool setzt nur den Status „storniert“ in Invoice Ninja. Es erzeugt **keine**
+Gutschrift und keine Stornorechnung. Ob Sie ein solches Dokument brauchen, klären Sie mit Ihrer
+Steuerberatung. Bereits erfasste Zahlungen einer teilbezahlten Rechnung bleiben bestehen. Das Tool
+prüft danach den Status und meldet einen Fehler, wenn Invoice Ninja den Storno nicht bestätigt.
+Über den MCP nicht umkehrbar. `destructiveHint: true`.
+- `rechnungsnr` (str, Pflicht)
+
 ### Was der MCP bewusst nicht kann
 
-Kein Tool löscht, archiviert oder stellt wieder her, bei keiner Objektart. Der MCP versendet keine
-E-Mails und ändert keinen Status. Im Einzelnen:
+Kein Tool löscht, archiviert oder stellt wieder her, bei keiner Objektart. Einen Rechnungsstatus
+ändert der MCP nur mit den Rechten `status`, `versenden` oder `stornieren`;
+`angebot_in_rechnung_umwandeln` (Recht `schreiben`) setzt zusätzlich den Status des Angebots auf
+„umgewandelt“. E-Mails verschickt er nur über `rechnung_versenden`. Im Einzelnen:
 
-- Rechnungen, Zahlungen und Gutschriften sind nur lesbar (`rechnungen_suchen`, `rechnung_lesen`,
-  `zahlungen_suchen`, `in_rohdaten` mit `rechnung`, `zahlung`, `gutschrift`,
-  `wiederkehrende_rechnung`). Der MCP legt keine an, ändert keine, versendet keine, markiert keine
-  als bezahlt und storniert keine.
+- Rechnungen: Ohne Rechnungsrechte nur lesbar. Mit Rechten legt der MCP Entwürfe an, bearbeitet
+  sie, wandelt Angebote um, markiert als versendet, erfasst Zahlungen, versendet und storniert (je
+  nach Recht). Er löscht keine Rechnung, weil die Nummer schon vergeben ist (GoBD). Versendete,
+  bezahlte und stornierte Rechnungen ändert er nicht, Korrektur nur per Storno. Er erzeugt keine
+  Gutschriften oder Stornorechnungen und markiert keine Rechnung ohne Zahlung als bezahlt.
+  Wiederkehrende Rechnungen sind nur lesbar (`in_rohdaten`).
+- Zahlungen: nur erfassen über `rechnung_zahlung_erfassen`, nicht ändern, löschen oder erstatten.
+- Gutschriften sind nur lesbar (`in_rohdaten`).
 - Kunden: Bestehende Kunden sind lesbar. Änderbar sind nur die Felder aus `kunde_aendern` und die
   Ansprechpartner über `kontakt_speichern` (anlegen und ändern, nicht löschen). Neue Kunden legt
   der MCP nicht an.
-- Angebote entstehen nur als Entwurf. Status werden nie geändert: kein Versenden oder Markieren als
-  versendet, kein Genehmigen, kein Umwandeln, kein Setzen der Schalter „bestellt“ oder
-  „abgeschlossen“. An Angeboten, die kein Entwurf mehr sind, ändert der MCP nur die private Notiz
-  (`notiz_setzen`). Kopfdaten eines Angebots (Datum, Gültigkeit, Empfänger, Rabatt, Bezeichnung)
-  lassen sich nach dem Anlegen nicht mehr ändern.
+- Angebote entstehen nur als Entwurf. Der MCP versendet keine Angebote, markiert keine als
+  versendet, genehmigt keine und setzt die Schalter „bestellt“ und „abgeschlossen“ nicht.
+  Umwandeln in eine Rechnung geht nur mit dem Recht `schreiben`. An Entwürfen sind Positionen,
+  Gültigkeit, Bezeichnung und öffentliche Notiz änderbar. Datum, Empfänger und Rabatt eines
+  Angebots lassen sich nach dem Anlegen nicht mehr ändern. An Angeboten, die kein Entwurf mehr
+  sind, ändert der MCP nur die private Notiz (`notiz_setzen`).
+- Optionale Positionen: Invoice Ninja 5.13 kennt keine optionalen Positionen, es gibt kein Feld
+  dafür. Der MCP bietet sie deshalb nicht an.
 - Projekte: Nur die Notiz ist schreibbar (`notiz_setzen`). Kein Anlegen, kein Abschließen.
 - Produktkatalog: Anlegen und Ändern von Text, Preis und MwSt. über `produkt_speichern`. Kein
   Löschen, kein Archivieren, kein Umbenennen des Keys.
@@ -457,8 +670,15 @@ Ohne `PMS_DB_PATH` wird das Vorlagen-Tool nicht registriert und es wird nichts p
   künftige Rechnungen und Angebote und den Portalzugang eines Kunden an Dritte umleiten.
 - **`produkt_speichern` prüft neue Produkt-Keys** gegen `^[\w .\-/]{1,100}$`, damit kein
   Zeilenumbruch eine gefälschte Zeile ins Log schreiben kann.
-- **`destructiveHint`** ist bei den fünf Schreib-Tools, die bestehende Daten überschreiben können,
-  `true` (siehe [Tools](#tools)).
+- **Rechnungsversand wirkt nach außen.** Eine per `rechnung_versenden` verschickte Rechnung lässt
+  sich nicht zurückholen, und jede angelegte Rechnung verbraucht eine Rechnungsnummer. Schalten Sie
+  die Rechnungsrechte deshalb nur frei, wenn Sie sie wirklich brauchen, und `versenden` nur, wenn
+  der Client Rechnungen tatsächlich selbst verschicken soll. Server-Hinweise und
+  Tool-Beschreibungen weisen den Client an, das nur auf ausdrücklichen Wunsch zu tun.
+- **`destructiveHint`** ist bei allen Schreib- und Rechnungs-Tools `true`, die bestehende Daten
+  überschreiben oder nach außen wirken, also auch bei Versand, Zahlung und Storno (siehe
+  [Tools](#tools)). MCP-Clients zeigen dann vor dem Aufruf einen entsprechenden Hinweis oder lassen
+  ihn bestätigen.
 - **Tokens:** Jede HTTP-Anfrage braucht `Authorization: Bearer <token>`, passend zu einer der
   Variablen `MCP_TOKEN_<NAME>`, sonst antwortet der Server mit 401. Der Vergleich läuft in
   konstanter Zeit (`hmac.compare_digest`). Der Name hinter `MCP_TOKEN_`, klein geschrieben,

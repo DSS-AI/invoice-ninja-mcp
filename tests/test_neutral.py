@@ -181,6 +181,9 @@ def katalog(neutral_mock, monkeypatch):
                         or {"id": "qneu", "number": "AN-9"})
     monkeypatch.setattr(t.nn, "update_quote_line_items",
                         lambda qid, items: neutral_mock["aufrufe"].append(("line_items", qid, items)) or {"id": qid})
+    monkeypatch.setattr(t.nn, "update_quote",
+                        lambda qid, felder: neutral_mock["aufrufe"].append(("quote_update", qid, felder))
+                        or {"id": qid, **felder})
     monkeypatch.setattr(t.nn, "create_product", lambda payload: neutral_mock["aufrufe"].append(
         ("product_create", payload)) or {"id": "pneu"})
     monkeypatch.setattr(t.nn, "get_tax_rates", lambda: [{"id": "x", "name": "MwSt.", "rate": 19.0}])
@@ -220,6 +223,18 @@ def test_positionen_setzen_ohne_bestell_sperre(katalog):
     katalog["quotes"] = [_quote(status="2")]
     with pytest.raises(t.ToolFehler, match="nicht Entwurf"):
         t.angebotsentwurf_positionen_setzen("desktop", "AN-1", [{"produkt": "Beratung"}])
+
+
+def test_kopf_setzen_ohne_bezeichnungsrolle(katalog):
+    """Ohne Rolle angebot.bezeichnung funktionieren gueltig_bis/oeffentliche_notiz weiterhin,
+    bezeichnung wird explizit abgelehnt statt einfach ignoriert."""
+    katalog["quotes"] = [_quote()]
+    text = t.angebotsentwurf_kopf_setzen("desktop", "AN-1", oeffentliche_notiz="Hinweis", heute=HEUTE)
+    (_, _, felder), = [a for a in katalog["aufrufe"] if a[0] == "quote_update"]
+    assert felder == {"public_notes": "Hinweis"}
+    assert "AN-1" in text
+    with pytest.raises(t.ToolFehler, match="Diese Instanz kennt keine Bezeichnung"):
+        t.angebotsentwurf_kopf_setzen("desktop", "AN-1", bezeichnung="Neu")
 
 
 def test_produkt_neu_mit_konfigurierter_steuerkategorie(katalog, monkeypatch):
@@ -278,6 +293,8 @@ def test_neutral_blendet_argumente_ohne_rolle_aus(neutral, monkeypatch):
     assert "abgeschlossen" not in tools["projekte_suchen"].parameters["properties"]
     assert not {"bezeichnung", "verkaufsbedingungen"} & set(tools["angebotsentwurf_anlegen"].parameters["properties"])
     assert "verkaufsbedingungen" not in tools["angebotsentwurf_positionen_setzen"].parameters["properties"]
+    assert "bezeichnung" not in tools["angebotsentwurf_kopf_setzen"].parameters["properties"]
+    assert {"gueltig_bis", "oeffentliche_notiz"} <= set(tools["angebotsentwurf_kopf_setzen"].parameters["properties"])
     for tool in tools.values():                     # keine DSS-Begriffe in den Beschreibungen
         assert not any(w in tool.description for w in ("AG…", "P…", "RG…", "VKBMA", "Termin", "PMS"))
 
@@ -294,6 +311,16 @@ def test_neutral_ausgeblendete_argumente_greifen_nicht(neutral_mock, monkeypatch
             return await c.call_tool("kunden_suchen", {"text": "Kunde"})
 
     assert asyncio.run(aufruf()).data["anzahl"] == 1
+
+
+def test_nur_muster_zeigt_verkaufsbedingungen(neutral, monkeypatch):
+    """Ohne Liste, aber mit Muster kennt die Instanz Verkaufsbedingungen: Argument sichtbar."""
+    import dataclasses
+    from in_mcp import server
+    k = dataclasses.replace(t.K, verkaufsbedingungen_muster="^AGB")
+    assert "verkaufsbedingungen" not in server.versteckte_argumente(k).get("angebotsentwurf_anlegen", [])
+    assert "angebotsentwurf_positionen_setzen" not in server.versteckte_argumente(k)
+    assert "'^AGB'" in server.anweisungen(k)
 
 
 def test_anweisungen_neutral(neutral):

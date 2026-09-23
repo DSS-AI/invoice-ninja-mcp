@@ -16,3 +16,10 @@ angebot:
 
 produkt:
   neue_steuerkategorie: "2"
+
+# Rechnungs-Tools sind standardmäßig gesperrt - erst nach Absprache mit dem Kunden bewusst freischalten.
+rechnungen:
+  schreiben: false
+  status: false
+  versenden: false
+  stornieren: false

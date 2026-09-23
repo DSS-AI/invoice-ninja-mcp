@@ -20,6 +20,10 @@ def test_dss_beispiel_laedt():
     assert k.freie_felder("kunde") == ("custom_value2", "custom_value3", "custom_value4")
     assert k.freie_felder("angebot") == ()
     assert "AG…" in k.hinweise
+    assert k.verkaufsbedingungen_muster == "^VKB"
+    assert k.rechnungen == {"schreiben": True, "status": True, "versenden": True, "stornieren": True}
+    assert k.rechnungen_erlaubt("schreiben") is True
+    assert k.rechnungen_erlaubt("stornieren") is True
 
 
 def test_neutral_beispiel_laedt():
@@ -28,6 +32,9 @@ def test_neutral_beispiel_laedt():
     assert k.feld("angebot", "bestellt") is None
     assert k.verkaufsbedingungen == () and k.standard_verkaufsbedingungen == ""
     assert k.freie_felder("projekt") == konfig.FELDER
+    assert k.verkaufsbedingungen_muster == ""
+    assert k.rechnungen == {"schreiben": False, "status": False, "versenden": False, "stornieren": False}
+    assert k.rechnungen_erlaubt("schreiben") is False
 
 
 def test_leere_datei_ergibt_neutrale_defaults():
@@ -35,6 +42,8 @@ def test_leere_datei_ergibt_neutrale_defaults():
     assert k.name == "Invoice Ninja" and k.rollen == {}
     assert (k.gueltig_standard_tage, k.gueltig_min_tage, k.gueltig_max_tage) == (30, 1, 365)
     assert k.neue_steuerkategorie == "2"
+    assert k.verkaufsbedingungen_muster == ""
+    assert k.rechnungen == {"schreiben": False, "status": False, "versenden": False, "stornieren": False}
 
 
 def test_standard_vkb_ist_erster_eintrag():
@@ -63,6 +72,11 @@ def test_standard_vkb_ist_erster_eintrag():
     ({"rollen": ["kunde"]}, "rollen: muss ein Abschnitt mit Schlüsseln sein"),
     ({"angebot": {"verkaufsbedingungen": "VKBMA"}},
      "angebot.verkaufsbedingungen: muss eine Liste sein, z. B. [VKBMA]."),
+    ({"angebot": {"verkaufsbedingungen_muster": "VKB("}},
+     "angebot.verkaufsbedingungen_muster: ungültiger regulärer Ausdruck"),
+    ({"rechnungen": {"schreiben": "ja"}}, "rechnungen.schreiben: muss true oder false sein."),
+    ({"rechnungen": {"stornieren": 1}}, "rechnungen.stornieren: muss true oder false sein."),
+    ({"rechnungen": {"loeschen": True}}, "rechnungen: unbekannter Schlüssel loeschen"),
 ])
 def test_startpruefung(daten, meldung):
     with pytest.raises(konfig.KonfigFehler, match=re.escape(meldung)):

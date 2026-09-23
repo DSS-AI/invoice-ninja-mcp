@@ -8,9 +8,10 @@ als erstes Argument den Aufrufer (Name aus MCP_TOKEN_<NAME>) fürs Protokoll.
 from __future__ import annotations
 
 import hmac
+import math
 import re
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from in_mcp import angebot, ninja as nn, pms
@@ -783,17 +784,33 @@ def notiz_setzen(aufrufer: str, ziel: str, text: str, modus: str = "anhaengen",
     return f"Notiz an {wo} {'ersetzt' if modus == 'ersetzen' else 'angehängt'}."
 
 
-def _positionen_bauen(positionen: list[dict], produkte: dict[str, dict]) -> list[dict]:
+def _vkb_aktiv() -> bool:
+    """Kennt die Instanz überhaupt Verkaufsbedingungen (Liste oder Muster)?"""
+    return bool(K.verkaufsbedingungen or K.verkaufsbedingungen_muster)
+
+
+def _vkb_keys(produkte: dict[str, dict]) -> set[str]:
+    """Regel 1: konfigurierte Verkaufsbedingungen plus alle Katalog-Keys, auf die das Muster passt
+    (case-sensitiv). Konfigurierte Keys werden auf die Schreibweise im Katalog abgebildet."""
+    katalog_ci = {schluessel.lower(): schluessel for schluessel in produkte}
+    keys = {katalog_ci.get(k.lower(), k) for k in K.verkaufsbedingungen}
+    if K.verkaufsbedingungen_muster:
+        muster = re.compile(K.verkaufsbedingungen_muster)
+        keys |= {k for k in produkte if muster.search(k)}
+    return keys
+
+
+def _positionen_bauen(positionen: list[dict], produkte: dict[str, dict],
+                      vkb_keys: set[str] | frozenset = frozenset()) -> tuple[list[dict], list[dict]]:
     """Katalogpositionen aus {produkt, menge?, preis?, text?}; MwSt. immer aus dem Katalog.
-    Verkaufsbedingungen werden übersprungen - die hängt der Aufrufer selbst ans Ende. Der
-    Produktschlüssel wird case-insensitiv auf den kanonischen Katalog-Key abgebildet."""
+    Positionen mit einem Key aus vkb_keys kommen getrennt als feste Positionen zurück
+    (liste, vkb_positionen) - der Aufrufer stellt sie ans Ende. Der Produktschlüssel wird
+    case-insensitiv auf den kanonischen Katalog-Key abgebildet."""
     produkte_ci = {schluessel.lower(): produkt for schluessel, produkt in produkte.items()}
-    vkb_ci = {schluessel.lower() for schluessel in K.verkaufsbedingungen}
-    liste = []
+    vkb_ci = {schluessel.lower() for schluessel in vkb_keys}
+    liste, vkb_positionen = [], []
     for pos in positionen:
         key = (pos.get("produkt") or "").strip()
-        if key.lower() in vkb_ci:
-            continue
         produkt = produkte_ci.get(key.lower())
         if produkt is None:
             raise ToolFehler(f"Produkt {key or '(leer)'} gibt es im IN-Katalog nicht. Siehe produkte_auflisten.")
@@ -807,7 +824,8 @@ def _positionen_bauen(positionen: list[dict], produkte: dict[str, dict]) -> list
                 raise ToolFehler(f"Position {key}: Menge muss eine Zahl größer 0 sein.")
             if menge <= 0:
                 raise ToolFehler(f"Position {key}: Menge muss eine Zahl größer 0 sein.")
-        p = angebot.katalog_position(produkt)
+        ist_vkb = key.lower() in vkb_ci
+        p = angebot.katalog_position(produkt, fest=ist_vkb)
         p["quantity"] = menge
         if pos.get("preis") is not None:
             try:
@@ -819,17 +837,63 @@ def _positionen_bauen(positionen: list[dict], produkte: dict[str, dict]) -> list
             p["cost"] = preis
         if pos.get("text"):
             p["notes"] = pos["text"]
-        liste.append(p)
-    return liste
+        if ist_vkb:
+            p["eigener_text"] = bool(pos.get("text"))
+            vkb_positionen.append(p)
+        else:
+            liste.append(p)
+    return liste, vkb_positionen
 
 
-def _vkb_pruefen(verkaufsbedingungen: str) -> None:
-    if not verkaufsbedingungen:
-        return
-    if not K.verkaufsbedingungen:
-        raise ToolFehler("Diese Instanz kennt keine Verkaufsbedingungen; verkaufsbedingungen weglassen.")
-    if verkaufsbedingungen not in K.verkaufsbedingungen:
-        raise ToolFehler(f"verkaufsbedingungen muss eines von {', '.join(K.verkaufsbedingungen)} sein.")
+def _vkb_setzen(liste: list[dict], vkb_positionen: list[dict], verkaufsbedingungen: str,
+                produkte: dict[str, dict], vkb_keys: set[str], bisher: list[str]) -> tuple[tuple, str]:
+    """Regeln 2-5: hängt höchstens eine Verkaufsbedingungen-Position an liste an. Liefert die Keys,
+    deren Vorhandensein pruefe_positionen verlangt (leer = keine Pflicht), und den Text für die
+    Rückmeldung (leer, wenn die Instanz keine Verkaufsbedingungen kennt)."""
+    parameter = (verkaufsbedingungen or "").strip()
+    if not _vkb_aktiv():
+        if parameter:
+            raise ToolFehler("Diese Instanz kennt keine Verkaufsbedingungen; verkaufsbedingungen weglassen.")
+        return (), ""
+    keys_ci = {k.lower(): k for k in vkb_keys}
+    keine = parameter.lower() == "keine"
+    if parameter and not keine:
+        if parameter.lower() not in keys_ci:
+            raise ToolFehler(f"verkaufsbedingungen muss eines von {', '.join(sorted(vkb_keys))} "
+                             "oder 'keine' sein.")
+        parameter = keys_ci[parameter.lower()]
+    if len(vkb_positionen) > 1:
+        raise ToolFehler("Höchstens eine Verkaufsbedingungen-Position erlaubt, übergeben: "
+                         f"{', '.join(p['product_key'] for p in vkb_positionen)}.")
+    pflicht = () if keine else tuple(sorted(vkb_keys))
+    hinweis = ""
+    if vkb_positionen:
+        pos = vkb_positionen[0]
+        vkb = pos["product_key"]
+        herkunft = "aus der Positionsliste, eigener Text" if pos.get("eigener_text") \
+            else "aus der Positionsliste, Katalogtext"
+        if parameter and parameter != vkb:
+            hinweis = (f" Parameter verkaufsbedingungen={verkaufsbedingungen.strip()} ignoriert, "
+                       f"Position {vkb} aus der Liste verwendet.")
+        liste.append(pos)
+        return tuple(sorted(vkb_keys)), f" Verkaufsbedingungen: {vkb} ({herkunft}).{hinweis}"
+    if keine:
+        return pflicht, " Verkaufsbedingungen: keine Verkaufsbedingungen."
+    bisher_keys = [keys_ci[b.lower()] for b in bisher if b and b.lower() in keys_ci]
+    if parameter:
+        vkb, herkunft = parameter, "Parameter"
+    elif bisher_keys:
+        vkb, herkunft = bisher_keys[-1], "bisherige des Angebots"
+    elif K.standard_verkaufsbedingungen:
+        vkb, herkunft = K.standard_verkaufsbedingungen, "Standard"
+    else:
+        return pflicht, ""   # pruefe_positionen meldet "Die Verkaufsbedingungen fehlen."
+    produkte_ci = {k.lower(): p for k, p in produkte.items()}
+    if vkb.lower() not in produkte_ci:
+        raise ToolFehler(f"Produkt {vkb} fehlt im IN-Katalog.")
+    position = angebot.katalog_position(produkte_ci[vkb.lower()], fest=True)
+    liste.append(position)
+    return pflicht, f" Verkaufsbedingungen: {position['product_key']} ({herkunft})."
 
 
 def angebotsentwurf_anlegen(aufrufer: str, kunde: str, kontakt_emails: list[str], positionen: list[dict],
@@ -841,18 +905,14 @@ def angebotsentwurf_anlegen(aufrufer: str, kunde: str, kontakt_emails: list[str]
             angebot.gueltig_bis_standard(heute, K.gueltig_standard_tage)
     except ValueError:
         raise ToolFehler(f"gueltig_bis '{gueltig_bis}' ist kein Datum im Format JJJJ-MM-TT.")
-    _vkb_pruefen(verkaufsbedingungen)
-    vkb = verkaufsbedingungen or K.standard_verkaufsbedingungen
     produkte = {p["product_key"]: p for p in nn.get_products()}
-    liste = _positionen_bauen(positionen, produkte)
-    if vkb:
-        if vkb not in produkte:
-            raise ToolFehler(f"Produkt {vkb} fehlt im IN-Katalog.")
-        liste.append(angebot.katalog_position(produkte[vkb], fest=True))
+    vkb_keys = _vkb_keys(produkte) if _vkb_aktiv() else set()
+    liste, vkb_positionen = _positionen_bauen(positionen, produkte, vkb_keys)
+    pflicht, vkb_text = _vkb_setzen(liste, vkb_positionen, verkaufsbedingungen, produkte, vkb_keys, [])
     bezeichnung_feld = K.feld("angebot", "bezeichnung")
     fehler = angebot.pruefe_kopf(bezeichnung, bis, heute, bezeichnung_pflicht=bool(bezeichnung_feld),
                                  min_tage=K.gueltig_min_tage, max_tage=K.gueltig_max_tage) \
-        + angebot.pruefe_positionen(liste, K.verkaufsbedingungen, K.individuell_produkt)
+        + angebot.pruefe_positionen(liste, pflicht, K.individuell_produkt)
     if fehler:
         raise ToolFehler(" ".join(fehler))
     c = _kunde(kunde)
@@ -876,37 +936,39 @@ def angebotsentwurf_anlegen(aufrufer: str, kunde: str, kontakt_emails: list[str]
     log.info("IN-MCP [%s] angebotsentwurf_anlegen %s für %s", aufrufer, nr, c.get("number"))
     netto, _mwst, brutto = angebot.summen(liste)
     return (f"Angebotsentwurf {nr} für {c.get('name', '')} angelegt: {netto:.2f} € netto, "
-            f"{brutto:.2f} € brutto, gültig bis {bis:%d.%m.%Y}. Status Entwurf, nicht versendet. "
+            f"{brutto:.2f} € brutto, gültig bis {bis:%d.%m.%Y}.{vkb_text} Status Entwurf, nicht versendet. "
             "Bitte in Invoice Ninja prüfen und von dort versenden." + hinweis)
+
+
+def _entwurf_pruefen(q: dict) -> None:
+    """Sperren für Änderungen an einem Angebotsentwurf: nur Status Entwurf, nicht archiviert, nicht
+    bestellt, nicht abgeschlossen. Gemeinsam für angebotsentwurf_positionen_setzen und
+    angebotsentwurf_kopf_setzen."""
+    status = str(q.get("status_id"))
+    if q.get("archived_at") or status != "1":
+        was = "archiviert" if q.get("archived_at") else QUOTE_STATUS.get(status, status)
+        raise ToolFehler(f"Angebot {q['number']} ist {was}, nicht Entwurf. Nur Entwürfe lassen sich ändern.")
+    sperren = (("bestellt", "ist bereits bestellt. Nur unbestellte Entwürfe lassen sich ändern."),
+               ("abgeschlossen", "ist als abgeschlossen markiert. Nur Entwürfe lassen sich ändern."))
+    for rolle, grund in sperren:
+        feld_ = K.feld("angebot", rolle)
+        if feld_ and _ja(q.get(feld_)):
+            raise ToolFehler(f"Angebot {q['number']} {grund}")
 
 
 def angebotsentwurf_positionen_setzen(aufrufer: str, angebotsnr: str, positionen: list[dict],
                                       verkaufsbedingungen: str = "") -> str:
     """Ersetzt die komplette Positionsliste eines Angebotsentwurfs. MwSt. aus dem Katalog,
-    Verkaufsbedingungen ans Ende (übergeben, sonst die bisherigen, sonst VKBMA)."""
-    _vkb_pruefen(verkaufsbedingungen)
+    Verkaufsbedingungen nach _vkb_setzen (Position aus der Liste, sonst Parameter, sonst die
+    bisherige, sonst der Standard)."""
     q = _quote(angebotsnr)
-    status = str(q.get("status_id"))
-    if q.get("archived_at") or status != "1":
-        was = "archiviert" if q.get("archived_at") else QUOTE_STATUS.get(status, status)
-        raise ToolFehler(f"Angebot {q['number']} ist {was}, nicht Entwurf. "
-                         "Positionen lassen sich nur in Entwürfen ändern.")
-    sperren = (("bestellt", "ist bereits bestellt. Positionen lassen sich nur vor der Bestellung ändern."),
-               ("abgeschlossen", "ist als abgeschlossen markiert. Positionen lassen sich nur in Entwürfen ändern."))
-    for rolle, grund in sperren:
-        feld_ = K.feld("angebot", rolle)
-        if feld_ and _ja(q.get(feld_)):
-            raise ToolFehler(f"Angebot {q['number']} {grund}")
+    _entwurf_pruefen(q)
     produkte = {p["product_key"]: p for p in nn.get_products()}
-    liste = _positionen_bauen(positionen, produkte)
-    bisher = [i.get("product_key") for i in q.get("line_items") or []
-              if i.get("product_key") in K.verkaufsbedingungen]
-    vkb = verkaufsbedingungen or (bisher[-1] if bisher else K.standard_verkaufsbedingungen)
-    if vkb:
-        if vkb not in produkte:
-            raise ToolFehler(f"Produkt {vkb} fehlt im IN-Katalog.")
-        liste.append(angebot.katalog_position(produkte[vkb], fest=True))
-    fehler = angebot.pruefe_positionen(liste, K.verkaufsbedingungen, K.individuell_produkt)
+    vkb_keys = _vkb_keys(produkte) if _vkb_aktiv() else set()
+    liste, vkb_positionen = _positionen_bauen(positionen, produkte, vkb_keys)
+    bisher = [i.get("product_key") or "" for i in q.get("line_items") or []]
+    pflicht, vkb_text = _vkb_setzen(liste, vkb_positionen, verkaufsbedingungen, produkte, vkb_keys, bisher)
+    fehler = angebot.pruefe_positionen(liste, pflicht, K.individuell_produkt)
     if fehler:
         raise ToolFehler(" ".join(fehler))
     brutto_vorher = float(q.get("amount") or 0)
@@ -918,10 +980,56 @@ def angebotsentwurf_positionen_setzen(aufrufer: str, angebotsnr: str, positionen
         netto = round(brutto - float(antwort.get("total_taxes") or 0), 2)
     else:
         netto, _mwst, brutto = angebot.summen(liste)
-    vkb_text = f" (Verkaufsbedingungen {vkb})" if vkb else ""
-    return (f"Angebotsentwurf {q['number']}: {len(liste)} Positionen gesetzt{vkb_text}. "
-            f"Netto {netto_vorher:.2f} € → {netto:.2f} €, brutto {brutto_vorher:.2f} € → {brutto:.2f} €. "
-            "Status Entwurf, nicht versendet.")
+    return (f"Angebotsentwurf {q['number']}: {len(liste)} Positionen gesetzt. "
+            f"Netto {netto_vorher:.2f} € → {netto:.2f} €, brutto {brutto_vorher:.2f} € → {brutto:.2f} €."
+            f"{vkb_text} Status Entwurf, nicht versendet.")
+
+
+_KOPF_LABEL = {"gueltig_bis": "Gültig bis", "bezeichnung": "Bezeichnung", "oeffentliche_notiz": "öffentliche Notiz"}
+
+
+def angebotsentwurf_kopf_setzen(aufrufer: str, angebotsnr: str, gueltig_bis: str = "",
+                                bezeichnung: str | None = None, oeffentliche_notiz: str | None = None,
+                                heute: date | None = None) -> str:
+    """Ändert Kopf-Felder eines Angebotsentwurfs: gueltig_bis (JJJJ-MM-TT, Grenzen aus der Konfiguration),
+    bezeichnung (nur mit Rolle angebot.bezeichnung, bereinigt wie beim Anlegen, nicht leer) und
+    oeffentliche_notiz (leerer String leert sie). Mindestens eines der drei Felder ist nötig. Sperren
+    wie angebotsentwurf_positionen_setzen (_entwurf_pruefen)."""
+    if not gueltig_bis and bezeichnung is None and oeffentliche_notiz is None:
+        raise ToolFehler("Bitte mindestens eines der Felder gueltig_bis, bezeichnung oder "
+                         "oeffentliche_notiz angeben.")
+    q = _quote(angebotsnr)
+    _entwurf_pruefen(q)
+    heute = heute or date.today()
+    felder: dict = {}
+    geaendert: list[str] = []
+    if gueltig_bis:
+        try:
+            bis = date.fromisoformat(gueltig_bis)
+        except ValueError:
+            raise ToolFehler(f"gueltig_bis '{gueltig_bis}' ist kein Datum im Format JJJJ-MM-TT.")
+        if bis < heute + timedelta(days=K.gueltig_min_tage):
+            raise ToolFehler(f"Das Angebot muss mindestens {K.gueltig_min_tage} Tage gültig sein.")
+        if bis > heute + timedelta(days=K.gueltig_max_tage):
+            raise ToolFehler(f"Das Angebot darf höchstens {K.gueltig_max_tage} Tage gültig sein.")
+        felder["due_date"] = bis.isoformat()
+        geaendert.append("gueltig_bis")
+    if bezeichnung is not None:
+        bezeichnung_feld = K.feld("angebot", "bezeichnung")
+        if not bezeichnung_feld:
+            raise ToolFehler("Diese Instanz kennt keine Bezeichnung für Angebote; bezeichnung weglassen.")
+        bereinigt = angebot.bereinige_bezeichnung(bezeichnung)
+        if not bereinigt:
+            raise ToolFehler("Bitte einen Projektnamen / eine Projektbezeichnung eintragen.")
+        felder[bezeichnung_feld] = bereinigt
+        geaendert.append("bezeichnung")
+    if oeffentliche_notiz is not None:
+        felder["public_notes"] = oeffentliche_notiz
+        geaendert.append("oeffentliche_notiz")
+    nn.update_quote(q["id"], felder)
+    log.info("IN-MCP [%s] angebotsentwurf_kopf_setzen %s (%s)", aufrufer, q["number"], ", ".join(geaendert))
+    namen = ", ".join(_KOPF_LABEL[g] for g in geaendert)
+    return f"Angebot {q['number']}: {namen} geändert."
 
 
 def _steuersatz(mwst: str) -> dict:
@@ -987,3 +1095,291 @@ def produkt_speichern(aufrufer: str, produkt: str, text: str | None = None, prei
     log.info("IN-MCP [%s] produkt_speichern %s (%s)", aufrufer, key, ergebnis)
     return (f"Produkt {key} {ergebnis}. Bestehende Angebote bleiben unverändert; ein Entwurf übernimmt "
             "neue Katalogwerte erst mit angebotsentwurf_positionen_setzen.")
+
+
+# --- Rechnungen ------------------------------------------------------------------
+# Nur Entwürfe (Status 1) sind über den MCP änderbar, auch wenn Invoice Ninja mehr erlauben würde
+# (lock_invoices) - versendete Rechnungen werden nur per Storno korrigiert. Gelöscht wird nie: die
+# Rechnungsnummer ist beim Anlegen schon vergeben.
+
+RECHNUNGSNR_HINWEIS = "Rechnungsnummer ist vergeben. Nicht löschen – eine falsche Rechnung stornieren."
+
+
+def _invoice_status(i: dict) -> str:
+    status = str(i.get("status_id"))
+    return INVOICE_STATUS.get(status, status)
+
+
+def _rechnung_frisch(rechnungsnr: str) -> dict:
+    """Rechnung per Nummer (Liste der neuesten 500), danach frisch aus IN gelesen - entscheidend für
+    alle Sperren ist der aktuelle Stand, nicht die Liste."""
+    i = nn.get_invoice(_rechnung(rechnungsnr)["id"])
+    if not i or i.get("is_deleted"):
+        raise ToolFehler(f"Rechnung {rechnungsnr.strip().upper()} ist gelöscht.")
+    return i
+
+
+def _rechnungsentwurf_pruefen(i: dict) -> None:
+    """Nur Entwürfe, die nicht archiviert sind, lassen sich über den MCP ändern."""
+    status = str(i.get("status_id"))
+    if i.get("archived_at") or status != "1":
+        was = "archiviert" if i.get("archived_at") else _invoice_status(i)
+        raise ToolFehler(f"Rechnung {i.get('number')} ist {was}, nicht Entwurf. Nur Entwürfe lassen sich "
+                         "ändern; versendete Rechnungen werden per Storno korrigiert.")
+
+
+def _datum(wert: str, name: str) -> date:
+    try:
+        return date.fromisoformat(wert.strip())
+    except ValueError:
+        raise ToolFehler(f"{name} '{wert}' ist kein Datum im Format JJJJ-MM-TT.")
+
+
+def _datum_oder_none(wert) -> date | None:
+    try:
+        return date.fromisoformat(str(wert or ""))
+    except ValueError:
+        return None
+
+
+def _faellig_pruefen(datum_: date | None, faellig: date | None) -> None:
+    if datum_ and faellig and faellig < datum_:
+        raise ToolFehler(f"Die Fälligkeit {faellig:%d.%m.%Y} liegt vor dem Rechnungsdatum {datum_:%d.%m.%Y}.")
+
+
+def _rechnungspositionen(positionen: list[dict]) -> list[dict]:
+    """Katalogpositionen wie bei Angeboten, aber ohne Verkaufsbedingungen-Logik: auch
+    Verkaufsbedingungen-Positionen bleiben normale Positionen an ihrer Stelle, nichts wird angehängt."""
+    produkte = {p["product_key"]: p for p in nn.get_products()}
+    liste, _vkb = _positionen_bauen(positionen, produkte)
+    fehler = angebot.pruefe_positionen(liste, (), K.individuell_produkt)
+    if fehler:
+        raise ToolFehler(" ".join(fehler))
+    return liste
+
+
+def _summen_aus(antwort: dict, liste: list[dict] | None = None) -> tuple[float, float]:
+    """(netto, brutto) aus der IN-Antwort, sonst aus den Positionen gerechnet."""
+    if "amount" in antwort:
+        brutto = round(float(antwort["amount"]), 2)
+        return round(brutto - float(antwort.get("total_taxes") or 0), 2), brutto
+    netto, _mwst, brutto = angebot.summen(liste or [])
+    return netto, brutto
+
+
+def rechnungsentwurf_anlegen(aufrufer: str, kunde: str, positionen: list[dict], kontakt_emails: list[str] = (),
+                             projekt: str = "", bestellnummer: str = "", datum: str = "", faellig: str = "",
+                             oeffentliche_notiz: str = "") -> str:
+    """Legt eine Rechnung als Entwurf an. kontakt_emails leer = Empfänger nach IN-Standard. projekt
+    (Projektnummer, IN-Nummer oder IN-ID) setzt project_id und - mit den Rollen - Projektnummer und
+    -bezeichnung der Rechnung."""
+    datum_ = _datum(datum, "datum") if datum else None
+    faellig_ = _datum(faellig, "faellig") if faellig else None
+    _faellig_pruefen(datum_, faellig_)
+    liste = _rechnungspositionen(positionen)
+    c = _kunde(kunde)
+    payload: dict = {"client_id": c["id"], "line_items": angebot.line_items(liste)}
+    if kontakt_emails:
+        ids = angebot.kontakt_ids_fuer(c, list(kontakt_emails))
+        gefunden = {(x.get("email") or "").strip().lower() for x in c.get("contacts") or [] if x.get("id") in ids}
+        fehlend = [e for e in kontakt_emails if e.strip().lower() not in gefunden]
+        if fehlend:
+            raise ToolFehler(f"Empfänger nicht bei {c.get('name', '')} gefunden: {', '.join(fehlend)}. "
+                             "Zuerst mit kontakt_speichern anlegen.")
+        payload["invitations"] = [{"client_contact_id": cid} for cid in ids]
+    if projekt:
+        p = _projekt(projekt)
+        if p.get("client_id") and p["client_id"] != c["id"]:
+            raise ToolFehler(f"Projekt {projekt.strip()} gehört nicht zu {c.get('name', '')}.")
+        payload["project_id"] = p["id"]
+        nr_feld, bez_feld = K.feld("rechnung", "projektnummer"), K.feld("rechnung", "projektbezeichnung")
+        if nr_feld:
+            quelle = K.feld("projekt", "projektnummer")
+            payload[nr_feld] = (p.get(quelle) if quelle else p.get("number")) or ""
+        if bez_feld:
+            quelle = K.feld("projekt", "name")
+            payload[bez_feld] = (p.get(quelle) if quelle else p.get("name")) or ""
+    if bestellnummer:
+        payload["po_number"] = bestellnummer.strip()
+    if datum_:
+        payload["date"] = datum_.isoformat()
+    if faellig_:
+        payload["due_date"] = faellig_.isoformat()
+    if oeffentliche_notiz:
+        payload["public_notes"] = oeffentliche_notiz
+    rechnung = nn.create_invoice(payload)
+    nr = rechnung.get("number", "")
+    log.info("IN-MCP [%s] rechnungsentwurf_anlegen %s für %s", aufrufer, nr, c.get("number"))
+    netto, brutto = _summen_aus(rechnung, liste)
+    return (f"Rechnungsentwurf {nr} für {c.get('name', '')} angelegt: {netto:.2f} € netto, {brutto:.2f} € "
+            f"brutto. Status Entwurf, nicht versendet. {RECHNUNGSNR_HINWEIS}")
+
+
+def rechnungsentwurf_positionen_setzen(aufrufer: str, rechnungsnr: str, positionen: list[dict]) -> str:
+    """Ersetzt die komplette Positionsliste eines Rechnungsentwurfs."""
+    i = _rechnung_frisch(rechnungsnr)
+    _rechnungsentwurf_pruefen(i)
+    liste = _rechnungspositionen(positionen)
+    brutto_vorher = round(float(i.get("amount") or 0), 2)
+    netto_vorher = round(brutto_vorher - float(i.get("total_taxes") or 0), 2)
+    antwort = nn.update_invoice(i["id"], {"line_items": angebot.line_items(liste)})
+    log.info("IN-MCP [%s] rechnungsentwurf_positionen_setzen %s (%d Positionen)", aufrufer, i["number"], len(liste))
+    netto, brutto = _summen_aus(antwort, liste)
+    return (f"Rechnungsentwurf {i['number']}: {len(liste)} Positionen gesetzt. "
+            f"Netto {netto_vorher:.2f} € → {netto:.2f} €, brutto {brutto_vorher:.2f} € → {brutto:.2f} €. "
+            "Status Entwurf, nicht versendet.")
+
+
+_RECHNUNG_KOPF = (("datum", "date", "Rechnungsdatum"), ("faellig", "due_date", "Fälligkeit"),
+                  ("bestellnummer", "po_number", "Bestellnummer"),
+                  ("oeffentliche_notiz", "public_notes", "öffentliche Notiz"),
+                  ("private_notiz", "private_notes", "private Notiz"))
+
+
+def rechnungsentwurf_kopf_setzen(aufrufer: str, rechnungsnr: str, datum: str = "", faellig: str = "",
+                                 bestellnummer: str | None = None, oeffentliche_notiz: str | None = None,
+                                 private_notiz: str | None = None) -> str:
+    """Ändert Kopf-Felder eines Rechnungsentwurfs. Texte mit None bleiben unverändert, ein leerer
+    String leert das Feld. Mindestens ein Feld ist nötig."""
+    werte = {"datum": datum or None, "faellig": faellig or None, "bestellnummer": bestellnummer,
+             "oeffentliche_notiz": oeffentliche_notiz, "private_notiz": private_notiz}
+    if all(w is None for w in werte.values()):
+        raise ToolFehler("Bitte mindestens eines der Felder datum, faellig, bestellnummer, oeffentliche_notiz "
+                         "oder private_notiz angeben.")
+    datum_ = _datum(datum, "datum") if datum else None
+    faellig_ = _datum(faellig, "faellig") if faellig else None
+    i = _rechnung_frisch(rechnungsnr)
+    _rechnungsentwurf_pruefen(i)
+    if datum_ or faellig_:
+        _faellig_pruefen(datum_ or _datum_oder_none(i.get("date")), faellig_ or _datum_oder_none(i.get("due_date")))
+    if datum_:
+        werte["datum"] = datum_.isoformat()
+    if faellig_:
+        werte["faellig"] = faellig_.isoformat()
+    felder = {feld_: werte[name] for name, feld_, _l in _RECHNUNG_KOPF if werte[name] is not None}
+    geaendert = [label for name, _f, label in _RECHNUNG_KOPF if werte[name] is not None]
+    nn.update_invoice(i["id"], felder)
+    log.info("IN-MCP [%s] rechnungsentwurf_kopf_setzen %s (%s)", aufrufer, i["number"], ", ".join(felder))
+    return f"Rechnung {i['number']}: {', '.join(geaendert)} geändert. Status Entwurf, nicht versendet."
+
+
+def angebot_in_rechnung_umwandeln(aufrufer: str, angebotsnr: str) -> str:
+    """Wandelt ein Angebot in einen Rechnungsentwurf um (IN übernimmt Positionen, Projekt, Bestellnummer,
+    Zusatzfelder). Gesperrt nur, wenn schon umgewandelt oder abgelaufen - wie in Invoice Ninja."""
+    q = _quote(angebotsnr)
+    if q.get("invoice_id"):
+        nr = _rechnungsnr_fuer(q["invoice_id"]) or q["invoice_id"]
+        raise ToolFehler(f"Angebot {q['number']} ist bereits in Rechnung {nr} umgewandelt.")
+    if str(q.get("status_id")) == "-1":
+        raise ToolFehler(f"Angebot {q['number']} ist abgelaufen – zuerst Gültigkeit verlängern.")
+    nn.quote_bulk("convert_to_invoice", [q["id"]])
+    invoice_id = (_quote_oder_none(q["number"]) or {}).get("invoice_id")
+    if not invoice_id:
+        log.warning("IN-MCP [%s] angebot_in_rechnung_umwandeln %s: keine Rechnung am Angebot", aufrufer, q["number"])
+        raise ToolFehler("Umwandlung von Invoice Ninja nicht bestätigt (Angebot hat keine Rechnung). Bitte mit "
+                         "angebot_lesen bzw. rechnungen_suchen prüfen.")
+    try:
+        rechnung = nn.get_invoice(invoice_id) or {}
+    except Exception:
+        log.warning("IN-MCP: Rechnung %s nach Umwandlung nicht lesbar", invoice_id, exc_info=True)
+        rechnung = {}
+    nr = rechnung.get("number", "")
+    log.info("IN-MCP [%s] angebot_in_rechnung_umwandeln %s → %s", aufrufer, q["number"], nr or invoice_id)
+    if not nr:
+        return (f"Angebot {q['number']} in einen Rechnungsentwurf umgewandelt (IN-ID {invoice_id}); die "
+                f"Rechnungsnummer ließ sich nicht lesen, bitte mit rechnungen_suchen prüfen. {RECHNUNGSNR_HINWEIS}")
+    netto, brutto = _summen_aus(rechnung)
+    return (f"Angebot {q['number']} in Rechnungsentwurf {nr} umgewandelt: {netto:.2f} € netto, {brutto:.2f} € "
+            f"brutto. Status Entwurf, nicht versendet. {RECHNUNGSNR_HINWEIS}")
+
+
+def rechnung_als_versendet_markieren(aufrufer: str, rechnungsnr: str) -> str:
+    """Setzt einen Rechnungsentwurf auf versendet, ohne E-Mail (Versand auf anderem Weg)."""
+    i = _rechnung_frisch(rechnungsnr)
+    _rechnungsentwurf_pruefen(i)
+    nn.invoice_bulk("mark_sent", [i["id"]])
+    danach = nn.get_invoice(i["id"]) or {}
+    log.info("IN-MCP [%s] rechnung_als_versendet_markieren %s", aufrufer, i["number"])
+    if str(danach.get("status_id") or "") in ("", "1"):   # nicht (mehr) lesbar oder noch Entwurf
+        raise ToolFehler(f"Markieren als versendet von Invoice Ninja nicht bestätigt (Status jetzt: "
+                         f"{_invoice_status(danach)}) – bitte in Invoice Ninja prüfen.")
+    return (f"Rechnung {i['number']} als versendet markiert (ohne E-Mail). Sie ist damit im MCP gesperrt, "
+            "Korrektur nur per Storno.")
+
+
+def rechnung_zahlung_erfassen(aufrufer: str, rechnungsnr: str, betrag: float | None = None, datum: str = "",
+                              referenz: str = "", heute: date | None = None) -> str:
+    """Erfasst eine Zahlung zu einer versendeten oder teilbezahlten Rechnung. Ohne betrag der offene
+    Restbetrag, ohne datum heute."""
+    i = _rechnung_frisch(rechnungsnr)
+    status = str(i.get("status_id"))
+    if status not in ("2", "3"):
+        raise ToolFehler(f"Rechnung {i['number']} ist {_invoice_status(i)}. Zahlungen lassen sich nur zu "
+                         "versendeten oder teilbezahlten Rechnungen erfassen.")
+    offen = round(float(i.get("balance") or 0), 2)
+    if offen <= 0:
+        raise ToolFehler(f"Rechnung {i['number']} hat keinen offenen Betrag mehr.")
+    if betrag is None:
+        wert = offen
+    else:
+        try:
+            wert = float(betrag)
+        except (TypeError, ValueError):
+            raise ToolFehler("betrag muss eine Zahl sein.")
+        if not math.isfinite(wert):
+            raise ToolFehler("betrag muss eine Zahl sein.")
+        if abs(wert * 100 - round(wert * 100)) > 1e-6:
+            raise ToolFehler("betrag darf höchstens zwei Nachkommastellen haben.")
+        wert = round(wert, 2)
+    if wert <= 0:
+        raise ToolFehler("betrag muss größer als 0 sein.")
+    if wert > offen:
+        raise ToolFehler(f"betrag darf höchstens {offen:.2f} € sein (offener Betrag von {i['number']}).")
+    tag = _datum(datum, "datum") if datum else (heute or date.today())
+    payload = {"client_id": i["client_id"], "amount": wert, "date": tag.isoformat()}
+    if referenz.strip():
+        payload["transaction_reference"] = referenz.strip()
+    payload["invoices"] = [{"invoice_id": i["id"], "amount": wert}]
+    nn.create_payment(payload)
+    log.info("IN-MCP [%s] rechnung_zahlung_erfassen %s %.2f", aufrufer, i["number"], wert)
+    return (f"Zahlung über {wert:.2f} € zu Rechnung {i['number']} erfasst ({tag:%d.%m.%Y}). "
+            f"Restbetrag {offen - wert:.2f} €.")
+
+
+def rechnung_versenden(aufrufer: str, rechnungsnr: str) -> str:
+    """Übergibt eine Rechnung an Invoice Ninja zum E-Mail-Versand an ihre Empfänger (IN wählt die Vorlage)."""
+    i = _rechnung_frisch(rechnungsnr)
+    if str(i.get("status_id")) in ("5", "6"):
+        raise ToolFehler(f"Rechnung {i['number']} ist {_invoice_status(i)} und wird nicht versendet.")
+    if i.get("archived_at"):
+        raise ToolFehler(f"Rechnung {i['number']} ist archiviert – vor dem Versand in Invoice Ninja wiederherstellen.")
+    kontakte = {k.get("id"): (k.get("email") or "").strip()
+                for k in (nn.get_client(i["client_id"]) or {}).get("contacts") or []}
+    emails = [kontakte.get(inv.get("client_contact_id"), "") for inv in i.get("invitations") or []]
+    emails = [e for e in emails if e]
+    if not emails:
+        raise ToolFehler(f"Rechnung {i['number']} hat keine Empfänger mit E-Mail-Adresse. Empfänger in "
+                         "Invoice Ninja an der Rechnung eintragen.")
+    nn.invoice_bulk("email", [i["id"]])
+    log.info("IN-MCP [%s] rechnung_versenden %s (%d Empfänger)", aufrufer, i["number"], len(emails))
+    # IN verschickt über eine Warteschlange: die Antwort heißt "angenommen", nicht "zugestellt"
+    return (f"Rechnung {i['number']} an Invoice Ninja zum Versand übergeben an {len(emails)} Empfänger "
+            f"({', '.join(emails)}). Zustellung im Verlauf der Rechnung in Invoice Ninja prüfen.")
+
+
+def rechnung_stornieren(aufrufer: str, rechnungsnr: str) -> str:
+    """Storniert eine versendete oder teilbezahlte Rechnung (Invoice Ninja storniert keine Entwürfe und
+    keine bezahlten Rechnungen)."""
+    i = _rechnung_frisch(rechnungsnr)
+    if str(i.get("status_id")) not in ("2", "3"):
+        raise ToolFehler(f"Rechnung {i['number']} ist {_invoice_status(i)}. Stornieren lassen sich nur "
+                         "versendete oder teilbezahlte Rechnungen.")
+    nn.invoice_bulk("cancel", [i["id"]])
+    danach = nn.get_invoice(i["id"]) or {}
+    log.info("IN-MCP [%s] rechnung_stornieren %s", aufrufer, i["number"])
+    if str(danach.get("status_id")) != "5":
+        raise ToolFehler(f"Storno von Invoice Ninja nicht bestätigt (Status jetzt: {_invoice_status(danach)}) – "
+                         "bitte in Invoice Ninja prüfen.")
+    zahlungen = " Bereits erfasste Zahlungen bleiben bestehen." if str(i.get("status_id")) == "3" else ""
+    return (f"Rechnung {i['number']} storniert. Status storniert in Invoice Ninja; es wird keine "
+            f"Gutschrift/Stornorechnung erzeugt.{zahlungen}")

@@ -303,6 +303,17 @@ def update_product(product_id: str, felder: dict) -> dict:
     return resp.json().get("data", {})
 
 
+def update_quote(quote_id: str, felder: dict) -> dict:
+    """Ändert einzelne Kopf-Felder eines Angebots (Gültig bis, Bezeichnung, öffentliche Notiz). Nur die
+    übergebenen Felder werden geschrieben, alle anderen (Positionen, Empfänger, Custom Values) bleiben
+    in Invoice Ninja unangetastet."""
+    url, token = _get_config()
+    resp = requests.put(f"{url}/api/v1/quotes/{quote_id}", headers=_schreib_header(token),
+                        json=felder, timeout=20)
+    resp.raise_for_status()
+    return resp.json().get("data", {})
+
+
 def update_quote_line_items(quote_id: str, line_items: list[dict]) -> dict:
     """Ersetzt die Positionen eines Angebots. Nur line_items - Kopf, Empfänger und Custom Values
     bleiben unangetastet. MwSt. steht je Position (siehe angebot.line_items)."""
@@ -311,3 +322,59 @@ def update_quote_line_items(quote_id: str, line_items: list[dict]) -> dict:
                         json={"line_items": line_items}, timeout=20)
     resp.raise_for_status()
     return resp.json().get("data", {})
+
+
+# --- Rechnungen (IN-MCP, pro Instanz freischaltbar) ---------------------------------
+# Rechnungen entstehen in IN immer als Entwurf; die Nummer vergibt IN je nach Einstellung
+# (counter_number_applied) schon beim Speichern. Gelöscht wird über den MCP nie.
+
+def get_invoice(invoice_id: str) -> dict:
+    """Eine Rechnung frisch aus IN, mit Empfängern (invitations) - vor jedem Schreiben lesen."""
+    url, token = _get_config()
+    resp = requests.get(f"{url}/api/v1/invoices/{invoice_id}", headers={"X-API-Token": token},
+                        params={"include": "invitations"}, timeout=15)
+    resp.raise_for_status()
+    return resp.json().get("data", {})
+
+
+def create_invoice(payload: dict) -> dict:
+    """Legt eine Rechnung an (in IN immer Status Entwurf). Gibt die IN-Daten zurück (id, number, amount)."""
+    url, token = _get_config()
+    resp = requests.post(f"{url}/api/v1/invoices", headers=_schreib_header(token), json=payload, timeout=20)
+    resp.raise_for_status()
+    return resp.json().get("data", {})
+
+
+def update_invoice(invoice_id: str, felder: dict) -> dict:
+    """Ändert einzelne Felder einer Rechnung; nicht übergebene bleiben in IN unverändert."""
+    url, token = _get_config()
+    resp = requests.put(f"{url}/api/v1/invoices/{invoice_id}", headers=_schreib_header(token),
+                        json=felder, timeout=20)
+    resp.raise_for_status()
+    return resp.json().get("data", {})
+
+
+def invoice_bulk(action: str, ids: list[str]) -> list | dict:
+    """Bulk-Aktion auf Rechnungen (mark_sent, email, cancel, ...). Liefert die Rechnungen danach."""
+    url, token = _get_config()
+    resp = requests.post(f"{url}/api/v1/invoices/bulk", headers=_schreib_header(token),
+                         json={"action": action, "ids": list(ids)}, timeout=30)
+    resp.raise_for_status()
+    return resp.json().get("data", [])
+
+
+def create_payment(payload: dict) -> dict:
+    """Erfasst eine Zahlung (client_id, amount, date, invoices: [{invoice_id, amount}])."""
+    url, token = _get_config()
+    resp = requests.post(f"{url}/api/v1/payments", headers=_schreib_header(token), json=payload, timeout=20)
+    resp.raise_for_status()
+    return resp.json().get("data", {})
+
+
+def quote_bulk(action: str, ids: list[str]) -> list | dict:
+    """Bulk-Aktion auf Angebote (z. B. convert_to_invoice)."""
+    url, token = _get_config()
+    resp = requests.post(f"{url}/api/v1/quotes/bulk", headers=_schreib_header(token),
+                         json={"action": action, "ids": list(ids)}, timeout=30)
+    resp.raise_for_status()
+    return resp.json().get("data", [])

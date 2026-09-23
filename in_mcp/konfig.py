@@ -27,12 +27,14 @@ ROLLEN = {
 LABEL_PRAEFIX = {"kunde": "client", "kontakt": "contact", "angebot": "invoice", "rechnung": "invoice",
                  "projekt": "project"}
 
-_OBERSTE = ("instanz", "rollen", "angebot", "produkt")
+_OBERSTE = ("instanz", "rollen", "angebot", "produkt", "rechnungen")
 _INSTANZ = ("name", "hinweise")
 _ANGEBOT = ("verkaufsbedingungen", "standard_verkaufsbedingungen", "individuell_produkt",
-            "gueltig_standard_tage", "gueltig_min_tage", "gueltig_max_tage", "angebotsnr_im_projektnamen")
+            "gueltig_standard_tage", "gueltig_min_tage", "gueltig_max_tage", "angebotsnr_im_projektnamen",
+            "verkaufsbedingungen_muster")
 _PRODUKT = ("neue_steuerkategorie",)
 _TAGE_DEFAULTS = (("gueltig_standard_tage", 30), ("gueltig_min_tage", 1), ("gueltig_max_tage", 365))
+_RECHNUNGEN = ("schreiben", "status", "versenden", "stornieren")
 
 
 class KonfigFehler(Exception):
@@ -52,6 +54,8 @@ class Konfig:
     gueltig_max_tage: int = 365
     angebotsnr_im_projektnamen: str = ""
     neue_steuerkategorie: str = "2"
+    verkaufsbedingungen_muster: str = ""
+    rechnungen: dict = field(default_factory=lambda: {k: False for k in _RECHNUNGEN})
 
     def feld(self, objekt: str, rolle: str) -> str | None:
         """IN-Feld (custom_valueN) einer Rolle oder None, wenn die Rolle nicht zugeordnet ist."""
@@ -61,6 +65,10 @@ class Konfig:
         """Custom Fields eines Objekts ohne Rolle - sie erscheinen als zusatzfelder."""
         belegt = set(self.rollen.get(objekt, {}).values())
         return tuple(f for f in FELDER if f not in belegt)
+
+    def rechnungen_erlaubt(self, recht: str) -> bool:
+        """Ob ein Rechnungs-Recht (schreiben/status/versenden/stornieren) für diese Instanz freigeschaltet ist."""
+        return self.rechnungen.get(recht, False)
 
 
 def _abschnitt(name: str, wert, erlaubt) -> dict:
@@ -126,10 +134,25 @@ def aus_dict(daten: dict | None) -> Konfig:
         except re.error as e:
             raise KonfigFehler(f"angebot.angebotsnr_im_projektnamen: ungültiger regulärer Ausdruck ({e}).")
 
+    vkb_muster = str(angebot.get("verkaufsbedingungen_muster") or "")
+    if vkb_muster:
+        try:
+            re.compile(vkb_muster)
+        except re.error as e:
+            raise KonfigFehler(f"angebot.verkaufsbedingungen_muster: ungültiger regulärer Ausdruck ({e}).")
+
     steuer = str(produkt.get("neue_steuerkategorie", "2"))
     if steuer not in ("1", "2", "3"):
         raise KonfigFehler("produkt.neue_steuerkategorie: erlaubt sind 1, 2, 3 "
                            "(Ware, Dienstleistung, Digital).")
+
+    rechnungen_roh = _abschnitt("rechnungen", daten.get("rechnungen"), _RECHNUNGEN)
+    rechnungen = {}
+    for schluessel in _RECHNUNGEN:
+        wert = rechnungen_roh.get(schluessel, False)
+        if not isinstance(wert, bool):
+            raise KonfigFehler(f"rechnungen.{schluessel}: muss true oder false sein.")
+        rechnungen[schluessel] = wert
 
     return Konfig(
         name=str(instanz.get("name") or "Invoice Ninja"),
@@ -140,6 +163,8 @@ def aus_dict(daten: dict | None) -> Konfig:
         individuell_produkt=str(angebot.get("individuell_produkt") or ""),
         angebotsnr_im_projektnamen=muster,
         neue_steuerkategorie=steuer,
+        verkaufsbedingungen_muster=vkb_muster,
+        rechnungen=rechnungen,
         **tage,
     )
 

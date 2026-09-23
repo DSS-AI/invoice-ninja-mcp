@@ -95,8 +95,8 @@ def _sicher(fn=None, *, schreibend: bool = False):
                 if schreibend:
                     raise ToolError(
                         "Ergebnis unklar: Invoice Ninja hat nicht rechtzeitig geantwortet. Bitte zuerst mit "
-                        "angebote_suchen, angebot_lesen bzw. kunde_lesen prüfen, ob die Änderung angekommen "
-                        "ist, bevor erneut versucht wird.")
+                        "angebote_suchen, angebot_lesen, rechnungen_suchen, rechnung_lesen, zahlungen_suchen bzw. "
+                        "kunde_lesen prüfen, ob die Änderung angekommen ist, bevor erneut versucht wird.")
                 raise ToolError("Invoice Ninja ist nicht erreichbar. Bitte später erneut versuchen.")
             except requests.HTTPError as e:
                 antwort = e.response
@@ -268,7 +268,9 @@ def angebotsentwurf_anlegen(kunde: str, kontakt_emails: list[str], positionen: l
     positionen: Liste aus {"produkt": Produkt-Key, "menge": Zahl (Standard 1), "preis": netto (optional,
     sonst Katalogpreis), "text": Positionstext (optional)}. kontakt_emails müssen Ansprechpartner des
     Kunden sein. gueltig_bis JJJJ-MM-TT (Grenzen und Standard stehen in den Server-Hinweisen).
-    Konfigurierte Verkaufsbedingungen hängt das Tool selbst ans Ende."""
+    Verkaufsbedingungen (falls konfiguriert): höchstens eine je Angebot, immer am Ende. Steht eine in
+    positionen, gilt sie mit ihrem Text; sonst verkaufsbedingungen (ein Verkaufsbedingungen-Key oder
+    'keine'), sonst der Standard."""
     return t.angebotsentwurf_anlegen(_aufrufer(), kunde, kontakt_emails, positionen, bezeichnung,
                                      gueltig_bis, verkaufsbedingungen)
 
@@ -280,11 +282,22 @@ def angebotsentwurf_positionen_setzen(angebotsnr: str, positionen: list[dict], v
     neue Liste in der gewünschten Reihenfolge - was fehlt, wird entfernt. positionen: Liste aus
     {"produkt": Produkt-Key, "menge": Zahl (Standard 1), "preis": netto (optional, sonst Katalogpreis),
     "text": Positionstext}. Ohne "text" gilt der Katalogtext - eigene Texte, die bleiben sollen, immer
-    mitschicken. Die MwSt. kommt je Position aus dem Katalog (siehe produkt_speichern). Konfigurierte
-    Verkaufsbedingungen hängt das Tool selbst an (die bisherigen, sonst die angegebenen, sonst den
-    Standard). Rabatte und sonstige Zusatzfelder einzelner Positionen gehen beim Neusetzen verloren -
+    mitschicken. Die MwSt. kommt je Position aus dem Katalog (siehe produkt_speichern). Verkaufsbedingungen
+    (falls konfiguriert): höchstens eine je Angebot, immer am Ende. Steht eine in positionen, gilt sie
+    mit ihrem Text; sonst verkaufsbedingungen (ein Verkaufsbedingungen-Key oder 'keine'), sonst die
+    bisherige des Angebots, sonst der Standard. Rabatte und sonstige Zusatzfelder einzelner Positionen gehen beim Neusetzen verloren -
     nur Produkt, Menge, Preis, Text und MwSt. werden geschrieben."""
     return t.angebotsentwurf_positionen_setzen(_aufrufer(), angebotsnr, positionen, verkaufsbedingungen)
+
+
+@_sicher(schreibend=True)
+def angebotsentwurf_kopf_setzen(angebotsnr: str, gueltig_bis: str = "", bezeichnung: str | None = None,
+                                oeffentliche_notiz: str | None = None) -> str:
+    """Ändert Kopf-Felder eines Angebots im Status ENTWURF (versendete, genehmigte und gesperrte Angebote
+    sind ausgeschlossen). Mindestens eines der Felder angeben. gueltig_bis JJJJ-MM-TT (Grenzen stehen in
+    den Server-Hinweisen). bezeichnung wird wie beim Anlegen bereinigt und darf nicht leer sein.
+    oeffentliche_notiz leer übergeben, um eine vorhandene öffentliche Notiz zu löschen."""
+    return t.angebotsentwurf_kopf_setzen(_aufrufer(), angebotsnr, gueltig_bis, bezeichnung, oeffentliche_notiz)
 
 
 @_sicher(schreibend=True)
@@ -298,14 +311,101 @@ def produkt_speichern(produkt: str, text: str | None = None, preis: float | None
     return t.produkt_speichern(_aufrufer(), produkt, text, preis, mwst)
 
 
+# --- Rechnungen (je Recht in instanz.yaml freigeschaltet) ------------------------------
+
+@_sicher(schreibend=True)
+def rechnungsentwurf_anlegen(kunde: str, positionen: list[dict], kontakt_emails: list[str] | None = None,
+                             projekt: str = "", bestellnummer: str = "", datum: str = "", faellig: str = "",
+                             oeffentliche_notiz: str = "") -> str:
+    """Legt eine Rechnung als ENTWURF in Invoice Ninja an (nicht versendet). Die Rechnungsnummer wird
+    dabei sofort vergeben - nur auf ausdrücklichen Wunsch anlegen, eine falsche Rechnung wird storniert,
+    nie gelöscht. positionen: Liste aus {"produkt": Produkt-Key, "menge": Zahl (Standard 1), "preis":
+    netto (optional, sonst Katalogpreis), "text": Positionstext (optional)}; MwSt. je Position aus dem
+    Katalog, alle Positionen in der übergebenen Reihenfolge, nichts wird automatisch angehängt.
+    kontakt_emails: Empfänger (Ansprechpartner des Kunden), leer = Standard von Invoice Ninja. projekt:
+    Projektnummer, IN-Nummer oder IN-ID eines Projekts desselben Kunden. datum/faellig JJJJ-MM-TT,
+    leer = Standard von Invoice Ninja."""
+    return t.rechnungsentwurf_anlegen(_aufrufer(), kunde, positionen, kontakt_emails or [], projekt,
+                                      bestellnummer, datum, faellig, oeffentliche_notiz)
+
+
+@_sicher(schreibend=True)
+def rechnungsentwurf_positionen_setzen(rechnungsnr: str, positionen: list[dict]) -> str:
+    """Ersetzt ALLE Positionen einer Rechnung im Status ENTWURF (versendete, bezahlte, stornierte und
+    archivierte Rechnungen sind gesperrt). Vorher rechnung_lesen aufrufen: Die übergebene Liste ist die
+    komplette neue Liste - was fehlt, wird entfernt. positionen wie bei rechnungsentwurf_anlegen; ohne
+    "text" gilt der Katalogtext. Rabatte und Zusatzfelder einzelner Positionen gehen verloren."""
+    return t.rechnungsentwurf_positionen_setzen(_aufrufer(), rechnungsnr, positionen)
+
+
+@_sicher(schreibend=True)
+def rechnungsentwurf_kopf_setzen(rechnungsnr: str, datum: str = "", faellig: str = "",
+                                 bestellnummer: str | None = None, oeffentliche_notiz: str | None = None,
+                                 private_notiz: str | None = None) -> str:
+    """Ändert Kopf-Felder einer Rechnung im Status ENTWURF: datum und faellig (JJJJ-MM-TT, Fälligkeit nicht
+    vor dem Rechnungsdatum), bestellnummer, oeffentliche_notiz, private_notiz. Mindestens ein Feld
+    angeben; ein leerer Text leert das Feld, nicht angegebene Felder bleiben unverändert."""
+    return t.rechnungsentwurf_kopf_setzen(_aufrufer(), rechnungsnr, datum, faellig, bestellnummer,
+                                          oeffentliche_notiz, private_notiz)
+
+
+@_sicher(schreibend=True)
+def angebot_in_rechnung_umwandeln(angebotsnr: str) -> str:
+    """Wandelt ein Angebot in einen Rechnungsentwurf um; Invoice Ninja übernimmt Positionen, Projekt,
+    Bestellnummer und Zusatzfelder. Nicht möglich, wenn das Angebot schon umgewandelt oder abgelaufen ist.
+    Die Rechnungsnummer wird dabei sofort vergeben - nur auf ausdrücklichen Wunsch umwandeln."""
+    return t.angebot_in_rechnung_umwandeln(_aufrufer(), angebotsnr)
+
+
+@_sicher(schreibend=True)
+def rechnung_als_versendet_markieren(rechnungsnr: str) -> str:
+    """Setzt einen Rechnungsentwurf auf 'versendet', OHNE E-Mail (für Rechnungen, die auf anderem Weg
+    verschickt wurden). Danach ist die Rechnung im MCP nicht mehr änderbar."""
+    return t.rechnung_als_versendet_markieren(_aufrufer(), rechnungsnr)
+
+
+@_sicher(schreibend=True)
+def rechnung_zahlung_erfassen(rechnungsnr: str, betrag: float | None = None, datum: str = "",
+                              referenz: str = "") -> str:
+    """Erfasst eine Zahlung zu einer versendeten oder teilbezahlten Rechnung mit offenem Betrag. betrag
+    netto+MwSt. (brutto), höchstens der offene Betrag, leer = der gesamte offene Betrag. datum JJJJ-MM-TT,
+    leer = heute. referenz: z. B. Verwendungszweck oder Buchungsreferenz. Nur auf ausdrücklichen Wunsch
+    des Nutzers."""
+    return t.rechnung_zahlung_erfassen(_aufrufer(), rechnungsnr, betrag, datum, referenz)
+
+
+@_sicher(schreibend=True)
+def rechnung_versenden(rechnungsnr: str) -> str:
+    """Übergibt eine Rechnung an Invoice Ninja zum Versand per E-Mail an alle Empfänger der Rechnung; die
+    Vorlage wählt Invoice Ninja (bei überfälligen Rechnungen ggf. eine Mahnvorlage). Invoice Ninja
+    verschickt verzögert - die Zustellung im Verlauf der Rechnung in Invoice Ninja prüfen. Wirkung nach
+    außen: nur auf ausdrücklichen Wunsch des Nutzers aufrufen. Ein Entwurf wird dabei auf 'versendet'
+    gesetzt. Stornierte, zurückerstattete und archivierte Rechnungen werden nicht versendet."""
+    return t.rechnung_versenden(_aufrufer(), rechnungsnr)
+
+
+@_sicher(schreibend=True)
+def rechnung_stornieren(rechnungsnr: str) -> str:
+    """Storniert eine versendete oder teilbezahlte Rechnung - der Weg, eine falsche Rechnung zu
+    korrigieren. Setzt nur den Status in Invoice Ninja, erzeugt keine Gutschrift/Stornorechnung; bereits
+    erfasste Zahlungen bleiben bestehen. Entwürfe und bezahlte Rechnungen lassen sich nicht stornieren.
+    Nicht umkehrbar. Nur auf ausdrücklichen Wunsch des Nutzers."""
+    return t.rechnung_stornieren(_aufrufer(), rechnungsnr)
+
+
 LESE_TOOLS = (kunden_suchen, kunde_lesen, angebote_suchen, angebot_lesen, projekte_suchen, projekt_lesen,
               rechnungen_suchen, rechnung_lesen, zahlungen_suchen, lieferanten_auflisten, dokumente_auflisten,
               produkte_auflisten, angebot_vorlagen_auflisten, in_rohdaten)
 SCHREIB_TOOLS = (kontakt_speichern, kunde_aendern, notiz_setzen, angebotsentwurf_anlegen,
-                 angebotsentwurf_positionen_setzen, produkt_speichern)
+                 angebotsentwurf_positionen_setzen, angebotsentwurf_kopf_setzen, produkt_speichern)
 # L4: angebotsentwurf_anlegen legt nur neu an (additiv); die übrigen Schreib-Tools überschreiben
 # bestehende Daten.
-ADDITIV_TOOLS = (angebotsentwurf_anlegen,)
+# Rechnungs-Tools: nur registriert, wenn das Recht in instanz.yaml (Abschnitt rechnungen) an ist.
+RECHNUNGS_TOOLS = {rechnungsentwurf_anlegen: "schreiben", rechnungsentwurf_positionen_setzen: "schreiben",
+                   rechnungsentwurf_kopf_setzen: "schreiben", angebot_in_rechnung_umwandeln: "schreiben",
+                   rechnung_als_versendet_markieren: "status", rechnung_zahlung_erfassen: "status",
+                   rechnung_versenden: "versenden", rechnung_stornieren: "stornieren"}
+ADDITIV_TOOLS = (angebotsentwurf_anlegen, rechnungsentwurf_anlegen, angebot_in_rechnung_umwandeln)
 
 
 def versteckte_argumente(k: konfig.Konfig) -> dict[str, list[str]]:
@@ -320,7 +420,8 @@ def versteckte_argumente(k: konfig.Konfig) -> dict[str, list[str]]:
             v.setdefault("kontakt_speichern", []).append(rolle)
     if not k.feld("angebot", "bezeichnung"):
         v.setdefault("angebotsentwurf_anlegen", []).append("bezeichnung")
-    if not k.verkaufsbedingungen:
+        v.setdefault("angebotsentwurf_kopf_setzen", []).append("bezeichnung")
+    if not (k.verkaufsbedingungen or k.verkaufsbedingungen_muster):
         v.setdefault("angebotsentwurf_anlegen", []).append("verkaufsbedingungen")
         v.setdefault("angebotsentwurf_positionen_setzen", []).append("verkaufsbedingungen")
     return v
@@ -331,13 +432,26 @@ def anweisungen(k: konfig.Konfig) -> str:
              "Unbekannte Nummern zuerst über die Such-Tools ermitteln. Schreibende Tools ändern echte "
              "Geschäftsdaten: vorher kurz sagen, was geändert wird. Angebote entstehen nur als Entwurf; "
              "versendet, bestellt und abgeschlossen wird in Invoice Ninja."]
-    if k.verkaufsbedingungen:
-        teile.append(f"Verkaufsbedingungen (Produkt-Keys, die Angebots-Tools hängen sie selbst an): "
-                     f"{', '.join(k.verkaufsbedingungen)}; Standard {k.standard_verkaufsbedingungen}.")
+    if k.verkaufsbedingungen or k.verkaufsbedingungen_muster:
+        keys = ", ".join(k.verkaufsbedingungen)
+        if k.verkaufsbedingungen_muster:
+            keys += (" sowie " if keys else "") + f"alle Katalog-Keys passend zu '{k.verkaufsbedingungen_muster}'"
+        standard = f"; Standard {k.standard_verkaufsbedingungen}" if k.standard_verkaufsbedingungen else ""
+        teile.append(f"Verkaufsbedingungen (Produkt-Keys, höchstens eine je Angebot, die Angebots-Tools "
+                     f"stellen sie ans Ende): {keys}{standard}.")
     teile.append(f"Angebote sind {k.gueltig_min_tage} bis {k.gueltig_max_tage} Tage gültig, "
                  f"Standard {k.gueltig_standard_tage} Tage.")
     if k.feld("kontakt", "anrede"):
         teile.append("Ansprechpartner brauchen eine Anrede: 'Herr' oder 'Frau'.")
+    rechnungen = [text for recht, text in (
+        ("schreiben", "Entwürfe anlegen, bearbeiten und aus Angeboten umwandeln"),
+        ("status", "als versendet markieren und Zahlungen erfassen"),
+        ("versenden", "per E-Mail aus Invoice Ninja versenden (nur auf ausdrücklichen Wunsch)"),
+        ("stornieren", "stornieren")) if k.rechnungen_erlaubt(recht)]
+    if rechnungen:
+        teile.append(f"Rechnungen: {', '.join(rechnungen)}. Nur Entwürfe sind änderbar; versendete Rechnungen "
+                     "sind im MCP gesperrt, Korrektur nur per Storno. Die Rechnungsnummer wird beim Anlegen "
+                     "vergeben - Rechnungen nie löschen.")
     if k.hinweise:
         teile.append(k.hinweise)
     return " ".join(teile)
@@ -346,8 +460,10 @@ def anweisungen(k: konfig.Konfig) -> str:
 def baue_mcp(k: konfig.Konfig) -> FastMCP:
     mcp = FastMCP("dss-invoice-ninja", instructions=anweisungen(k))
     versteckt = versteckte_argumente(k)
-    for fn in LESE_TOOLS + SCHREIB_TOOLS:
+    for fn in LESE_TOOLS + SCHREIB_TOOLS + tuple(RECHNUNGS_TOOLS):
         if fn is angebot_vorlagen_auflisten and not pms.aktiv():
+            continue
+        if fn in RECHNUNGS_TOOLS and not k.rechnungen_erlaubt(RECHNUNGS_TOOLS[fn]):
             continue
         if fn in LESE_TOOLS:
             annotations = LESEND

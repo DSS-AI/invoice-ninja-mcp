@@ -512,10 +512,14 @@ def schreib_mock(in_mock, monkeypatch):
     monkeypatch.setattr(t.nn, "get_products", lambda: [
         {"id": f"p{k}", "product_key": k, "notes": f"Text {k}", "price": p, "tax_name1": "MwSt.",
          "tax_rate1": 19, "tax_id": "2"}
-        for k, p in (("RB-MAVO", 2750.0), ("BAMA", 1575.0), ("VKBMA", 0.0), ("AKAllg", 0.0), ("IndLeist", 0.0))])
+        for k, p in (("RB-MAVO", 2750.0), ("BAMA", 1575.0), ("VKBMA", 0.0), ("AKAllg", 0.0), ("IndLeist", 0.0),
+                     ("VKBeBM", 0.0), ("RAeBM", 1200.0), ("BAeBM", 800.0))])
     monkeypatch.setattr(t.nn, "update_quote_line_items",
                         lambda qid, items: in_mock["aufrufe"].append(("line_items", qid, copy.deepcopy(items)))
                         or {"id": qid})
+    monkeypatch.setattr(t.nn, "update_quote",
+                        lambda qid, felder: in_mock["aufrufe"].append(("quote_update", qid, copy.deepcopy(felder)))
+                        or {"id": qid, **felder})
     monkeypatch.setattr(t, "log_angebot", lambda nr, qid, cid: in_mock["log"].append((nr, qid, cid)))
     monkeypatch.setattr(t, "log", MagicMock())  # keine Testläufe im echten ab_sync.log
     monkeypatch.setattr(t.nn, "get_tax_rates", lambda: [{"id": "VolejRejNm", "name": "MwSt.", "rate": 19.0}])
@@ -700,20 +704,27 @@ def test_entwurf_unbekanntes_produkt_und_gueltigkeit(schreib_mock):
     assert schreib_mock["aufrufe"] == []
 
 
-def test_positionen_bauen_ueberspringt_vkb_und_uebernimmt_angaben(schreib_mock):
+def test_positionen_bauen_trennt_vkb_und_uebernimmt_angaben(schreib_mock):
     produkte = {p["product_key"]: p for p in t.nn.get_products()}
-    liste = t._positionen_bauen(
-        [{"produkt": "VKBMA"}, {"produkt": "BAMA", "menge": 2, "preis": 100, "text": "Neu"}, {"produkt": "RB-MAVO"}],
-        produkte)
+    liste, vkb = t._positionen_bauen(
+        [{"produkt": "vkbma"}, {"produkt": "BAMA", "menge": 2, "preis": 100, "text": "Neu"}, {"produkt": "RB-MAVO"}],
+        produkte, t._vkb_keys(produkte))
     assert [(p["product_key"], p["quantity"], p["cost"], p["notes"]) for p in liste] == [
         ("BAMA", 2.0, 100.0, "Neu"), ("RB-MAVO", 1.0, 2750.0, "Text RB-MAVO")]
     assert all(p["tax_rate1"] == 19 and not p["fest"] for p in liste)
+    assert [(p["product_key"], p["notes"], p["fest"]) for p in vkb] == [("VKBMA", "Text VKBMA", True)]
+
+
+def test_vkb_keys_aus_liste_und_muster(schreib_mock):
+    produkte = {p["product_key"]: p for p in t.nn.get_products()}
+    assert t._vkb_keys(produkte) == {"VKBMA", "AKAllg", "VKBeBM"}
+    assert "vkbx" not in t._vkb_keys({"vkbx": {}})  # Muster case-sensitiv
 
 
 def test_positionen_bauen_produktschluessel_gross_klein(schreib_mock):
     """F5: Produktschlüssel wird case-insensitiv auf den kanonischen Katalog-Key abgebildet."""
     produkte = {p["product_key"]: p for p in t.nn.get_products()}
-    liste = t._positionen_bauen([{"produkt": "bama"}], produkte)
+    liste, _vkb = t._positionen_bauen([{"produkt": "bama"}], produkte)
     assert liste[0]["product_key"] == "BAMA"
 
 
@@ -778,9 +789,9 @@ def test_positionen_setzen_summen_aus_in(schreib_mock, monkeypatch):
 
 def test_positionen_setzen_verkaufsbedingungen(schreib_mock):
     _entwurf(schreib_mock)  # trägt AKAllg
-    t.angebotsentwurf_positionen_setzen("desktop", "AG1260300", [{"produkt": "BAMA"}, {"produkt": "VKBMA"}])
+    t.angebotsentwurf_positionen_setzen("desktop", "AG1260300", [{"produkt": "VKBMA"}, {"produkt": "BAMA"}])
     items = _line_item_aufrufe(schreib_mock)[-1][2]
-    assert [i["product_key"] for i in items] == ["BAMA", "AKAllg"]  # übergebene VKB übersprungen, bisherige bleibt
+    assert [i["product_key"] for i in items] == ["BAMA", "VKBMA"]  # übergebene VKB hat Vorrang, ans Ende
     t.angebotsentwurf_positionen_setzen("desktop", "AG1260300", [{"produkt": "BAMA"}], verkaufsbedingungen="VKBMA")
     assert [i["product_key"] for i in _line_item_aufrufe(schreib_mock)[-1][2]] == ["BAMA", "VKBMA"]
     _entwurf(schreib_mock, nr="AG1260301", vkb="")
@@ -803,6 +814,223 @@ def test_positionen_setzen_ablehnungen(schreib_mock):
     with pytest.raises(t.ToolFehler, match="nicht gefunden"):
         t.angebotsentwurf_positionen_setzen("desktop", "AG1269999", [{"produkt": "BAMA"}])
     assert _line_item_aufrufe(schreib_mock) == []
+
+
+# --- Angebotskopf setzen ----------------------------------------------------------
+
+def _kopf_aufrufe(stand):
+    return [a for a in stand["aufrufe"] if a[0] == "quote_update"]
+
+
+def test_kopf_setzen_gueltig_bis(schreib_mock):
+    _entwurf(schreib_mock, nr="AG1260500")
+    text = t.angebotsentwurf_kopf_setzen("desktop", "AG1260500", gueltig_bis="2026-10-15", heute=HEUTE)
+    (_, qid, felder), = _kopf_aufrufe(schreib_mock)
+    assert (qid, felder) == ("qAG1260500", {"due_date": "2026-10-15"})
+    assert "AG1260500" in text and "Gültig bis" in text
+
+
+def test_kopf_setzen_bezeichnung_wird_bereinigt(schreib_mock):
+    _entwurf(schreib_mock, nr="AG1260501")
+    text = t.angebotsentwurf_kopf_setzen("desktop", "AG1260501", bezeichnung="  •\tNeue Presse  ")
+    (_, _, felder), = _kopf_aufrufe(schreib_mock)
+    assert felder == {"custom_value2": "Neue Presse"}
+    assert "Bezeichnung" in text
+
+
+def test_kopf_setzen_oeffentliche_notiz(schreib_mock):
+    _entwurf(schreib_mock, nr="AG1260502")
+    t.angebotsentwurf_kopf_setzen("desktop", "AG1260502", oeffentliche_notiz="Bitte vor Lieferung anrufen.")
+    (_, _, felder), = _kopf_aufrufe(schreib_mock)
+    assert felder == {"public_notes": "Bitte vor Lieferung anrufen."}
+
+
+def test_kopf_setzen_oeffentliche_notiz_leerer_string_leert(schreib_mock):
+    _entwurf(schreib_mock, nr="AG1260503", public_notes="alt")
+    t.angebotsentwurf_kopf_setzen("desktop", "AG1260503", oeffentliche_notiz="")
+    (_, _, felder), = _kopf_aufrufe(schreib_mock)
+    assert felder == {"public_notes": ""}
+
+
+def test_kopf_setzen_alle_drei_felder(schreib_mock):
+    _entwurf(schreib_mock, nr="AG1260504")
+    text = t.angebotsentwurf_kopf_setzen("desktop", "AG1260504", gueltig_bis="2026-10-15",
+                                         bezeichnung="Neu", oeffentliche_notiz="Hinweis", heute=HEUTE)
+    (_, _, felder), = _kopf_aufrufe(schreib_mock)
+    assert felder == {"due_date": "2026-10-15", "custom_value2": "Neu", "public_notes": "Hinweis"}
+    assert all(w in text for w in ("Gültig bis", "Bezeichnung", "öffentliche Notiz"))
+
+
+def test_kopf_setzen_mindestens_ein_feld_noetig(schreib_mock):
+    _entwurf(schreib_mock, nr="AG1260505")
+    with pytest.raises(t.ToolFehler, match="mindestens eines der Felder"):
+        t.angebotsentwurf_kopf_setzen("desktop", "AG1260505")
+    assert _kopf_aufrufe(schreib_mock) == []
+
+
+def test_kopf_setzen_nur_entwurf(schreib_mock):
+    for i, status in enumerate(("2", "3", "4", "-1")):
+        _entwurf(schreib_mock, nr=f"AG126051{i}", status=status)
+        with pytest.raises(t.ToolFehler, match="nicht Entwurf"):
+            t.angebotsentwurf_kopf_setzen("desktop", f"AG126051{i}", oeffentliche_notiz="x")
+    _entwurf(schreib_mock, nr="AG1260520", archived_at=1700000000)
+    with pytest.raises(t.ToolFehler, match="archiviert"):
+        t.angebotsentwurf_kopf_setzen("desktop", "AG1260520", oeffentliche_notiz="x")
+    _entwurf(schreib_mock, nr="AG1260521", custom_value3="yes")
+    with pytest.raises(t.ToolFehler, match="bestellt"):
+        t.angebotsentwurf_kopf_setzen("desktop", "AG1260521", oeffentliche_notiz="x")
+    _entwurf(schreib_mock, nr="AG1260522", custom_value4="yes")
+    with pytest.raises(t.ToolFehler, match="als abgeschlossen markiert"):
+        t.angebotsentwurf_kopf_setzen("desktop", "AG1260522", oeffentliche_notiz="x")
+    assert _kopf_aufrufe(schreib_mock) == []
+
+
+def test_kopf_setzen_gueltigkeit_grenzen_und_format(schreib_mock):
+    _entwurf(schreib_mock, nr="AG1260530")
+    with pytest.raises(t.ToolFehler, match="mindestens 14 Tage"):
+        t.angebotsentwurf_kopf_setzen("desktop", "AG1260530", gueltig_bis="2026-09-30", heute=HEUTE)
+    with pytest.raises(t.ToolFehler, match="höchstens 60 Tage"):
+        t.angebotsentwurf_kopf_setzen("desktop", "AG1260530", gueltig_bis="2026-12-31", heute=HEUTE)
+    with pytest.raises(t.ToolFehler, match="JJJJ-MM-TT"):
+        t.angebotsentwurf_kopf_setzen("desktop", "AG1260530", gueltig_bis="30.09.2026", heute=HEUTE)
+    assert _kopf_aufrufe(schreib_mock) == []
+
+
+def test_kopf_setzen_bezeichnung_leer_abgelehnt(schreib_mock):
+    _entwurf(schreib_mock, nr="AG1260540")
+    with pytest.raises(t.ToolFehler, match="Projektnamen"):
+        t.angebotsentwurf_kopf_setzen("desktop", "AG1260540", bezeichnung="   •  ")
+    assert _kopf_aufrufe(schreib_mock) == []
+
+
+def test_kopf_setzen_nicht_gefunden(schreib_mock):
+    with pytest.raises(t.ToolFehler, match="nicht gefunden"):
+        t.angebotsentwurf_kopf_setzen("desktop", "AG1269999", oeffentliche_notiz="x")
+    assert _kopf_aufrufe(schreib_mock) == []
+
+
+def test_kopf_setzen_log(schreib_mock):
+    _entwurf(schreib_mock, nr="AG1260550")
+    t.angebotsentwurf_kopf_setzen("hermes", "AG1260550", oeffentliche_notiz="Hinweis")
+    meldung, aufrufer = t.log.info.call_args[0][0], t.log.info.call_args[0][1]
+    assert meldung.startswith("IN-MCP [") and aufrufer == "hermes"
+
+
+# --- Verkaufsbedingungen nach Regeln 1-5 (Abnahmetests) ----------------------------
+
+def _keys(stand):
+    return [i["product_key"] for i in _line_item_aufrufe(stand)[-1][2]]
+
+
+def test_vkb_abnahme_1_bisherige_vkbebm_bleibt(schreib_mock):
+    _entwurf(schreib_mock, vkb="VKBeBM")
+    text = t.angebotsentwurf_positionen_setzen("desktop", "AG1260300", [{"produkt": "RAeBM"}, {"produkt": "BAeBM"}])
+    items = _line_item_aufrufe(schreib_mock)[-1][2]
+    assert [i["product_key"] for i in items] == ["RAeBM", "BAeBM", "VKBeBM"]
+    assert items[-1]["notes"] == "Text VKBeBM"
+    assert "VKBeBM (bisherige des Angebots)" in text
+
+
+def test_vkb_abnahme_2_vkbebm_mit_eigenem_text(schreib_mock):
+    _entwurf(schreib_mock, vkb="VKBeBM")
+    text = t.angebotsentwurf_positionen_setzen(
+        "desktop", "AG1260300", [{"produkt": "VKBeBM", "text": "Eigene AGB"}, {"produkt": "RAeBM"}])
+    items = _line_item_aufrufe(schreib_mock)[-1][2]
+    assert [i["product_key"] for i in items] == ["RAeBM", "VKBeBM"]
+    assert items[-1]["notes"] == "Eigene AGB"
+    assert "VKBeBM (aus der Positionsliste, eigener Text)" in text
+
+
+def test_vkb_abnahme_3_vkbma_eigener_text_keine_zweite(schreib_mock):
+    _entwurf(schreib_mock, vkb="VKBMA")
+    t.angebotsentwurf_positionen_setzen(
+        "desktop", "AG1260300", [{"produkt": "BAMA"}, {"produkt": "VKBMA", "text": "Sondertext"}])
+    items = _line_item_aufrufe(schreib_mock)[-1][2]
+    assert [i["product_key"] for i in items] == ["BAMA", "VKBMA"]
+    assert items[-1]["notes"] == "Sondertext"
+
+
+def test_vkb_abnahme_4_parameter_vkbebm(schreib_mock):
+    _entwurf(schreib_mock, vkb="VKBMA")
+    text = t.angebotsentwurf_positionen_setzen("desktop", "AG1260300", [{"produkt": "RAeBM"}],
+                                               verkaufsbedingungen="VKBeBM")
+    assert _keys(schreib_mock) == ["RAeBM", "VKBeBM"]
+    assert "VKBeBM (Parameter)" in text
+
+
+def test_vkb_abnahme_5_keine(schreib_mock):
+    _entwurf(schreib_mock, vkb="VKBMA")
+    text = t.angebotsentwurf_positionen_setzen("desktop", "AG1260300", [{"produkt": "RAeBM"}],
+                                               verkaufsbedingungen="keine")
+    assert _keys(schreib_mock) == ["RAeBM"]
+    assert "keine Verkaufsbedingungen" in text
+
+
+def test_vkb_abnahme_6_zwei_vkb_fehler(schreib_mock):
+    _entwurf(schreib_mock)
+    with pytest.raises(t.ToolFehler, match="VKBeBM, VKBMA"):
+        t.angebotsentwurf_positionen_setzen(
+            "desktop", "AG1260300", [{"produkt": "RAeBM"}, {"produkt": "VKBeBM"}, {"produkt": "VKBMA"}])
+    with pytest.raises(t.ToolFehler, match="Höchstens eine"):
+        t.angebotsentwurf_anlegen("desktop", "70001", ["anna@muster.de"],
+                                  [{"produkt": "RAeBM"}, {"produkt": "VKBeBM"}, {"produkt": "VKBMA"}], "X",
+                                  heute=HEUTE)
+    assert schreib_mock["aufrufe"] == []
+
+
+def test_vkb_abnahme_7_nicht_entwurf_gesperrt(schreib_mock):
+    _entwurf(schreib_mock, status="2", vkb="VKBeBM")
+    with pytest.raises(t.ToolFehler, match="nicht Entwurf"):
+        t.angebotsentwurf_positionen_setzen("desktop", "AG1260300",
+                                            [{"produkt": "RAeBM"}, {"produkt": "VKBeBM", "text": "X"}])
+    assert _line_item_aufrufe(schreib_mock) == []
+
+
+def test_vkb_abnahme_8_vkb_aendert_netto_nicht(schreib_mock):
+    _entwurf(schreib_mock, vkb="VKBeBM")
+    text = t.angebotsentwurf_positionen_setzen(
+        "desktop", "AG1260300", [{"produkt": "RAeBM"}, {"produkt": "VKBeBM", "text": "Eigene AGB"}])
+    assert "→ 1200.00 €" in text and "→ 1428.00 €" in text
+
+
+def test_vkb_anlegen_mit_parameter_vkbebm(schreib_mock):
+    text = t.angebotsentwurf_anlegen("desktop", "70001", ["anna@muster.de"], [{"produkt": "RAeBM"}], "X",
+                                     verkaufsbedingungen="VKBeBM", heute=HEUTE)
+    art, payload = schreib_mock["aufrufe"][0]
+    assert [i["product_key"] for i in payload["line_items"]] == ["RAeBM", "VKBeBM"]
+    assert "VKBeBM (Parameter)" in text
+
+
+def test_vkb_anlegen_position_und_standard(schreib_mock):
+    text = t.angebotsentwurf_anlegen("desktop", "70001", ["anna@muster.de"],
+                                     [{"produkt": "vkbebm"}, {"produkt": "RAeBM"}], "X", heute=HEUTE)
+    assert [i["product_key"] for i in schreib_mock["aufrufe"][0][1]["line_items"]] == ["RAeBM", "VKBeBM"]
+    assert "VKBeBM (aus der Positionsliste, Katalogtext)" in text
+    text = t.angebotsentwurf_anlegen("desktop", "70001", ["anna@muster.de"], [{"produkt": "RAeBM"}], "X",
+                                     heute=HEUTE)
+    assert [i["product_key"] for i in schreib_mock["aufrufe"][-1][1]["line_items"]] == ["RAeBM", "VKBMA"]
+    assert "VKBMA (Standard)" in text
+
+
+def test_vkb_widerspruch_parameter_position(schreib_mock):
+    _entwurf(schreib_mock)
+    text = t.angebotsentwurf_positionen_setzen("desktop", "AG1260300", [{"produkt": "RAeBM"}, {"produkt": "VKBeBM"}],
+                                               verkaufsbedingungen="VKBMA")
+    assert _keys(schreib_mock) == ["RAeBM", "VKBeBM"]
+    assert "Parameter verkaufsbedingungen=VKBMA ignoriert, Position VKBeBM aus der Liste verwendet" in text
+
+
+def test_vkb_muster_erkennt_neuen_katalog_key(schreib_mock, monkeypatch):
+    katalog = t.nn.get_products() + [{"id": "pVKBxyz", "product_key": "VKBxyz", "notes": "Text VKBxyz",
+                                      "price": 0.0, "tax_name1": "MwSt.", "tax_rate1": 19, "tax_id": "2"}]
+    monkeypatch.setattr(t.nn, "get_products", lambda: katalog)
+    _entwurf(schreib_mock, vkb="VKBxyz")
+    t.angebotsentwurf_positionen_setzen("desktop", "AG1260300", [{"produkt": "BAMA"}])
+    assert _keys(schreib_mock) == ["BAMA", "VKBxyz"]
+    t.angebotsentwurf_positionen_setzen("desktop", "AG1260300", [{"produkt": "BAMA"}], verkaufsbedingungen="VKBxyz")
+    assert _keys(schreib_mock) == ["BAMA", "VKBxyz"]
+    with pytest.raises(t.ToolFehler, match="VKBxyz"):  # Fehlermeldung nennt die erkannten Keys
+        t.angebotsentwurf_positionen_setzen("desktop", "AG1260300", [{"produkt": "BAMA"}], verkaufsbedingungen="XYZ")
 
 
 def test_produkte_auflisten_mit_steuer(schreib_mock):
@@ -990,10 +1218,16 @@ LESENDE_TOOLS = {"kunden_suchen", "kunde_lesen", "angebote_suchen", "angebot_les
                  "lieferanten_auflisten", "dokumente_auflisten", "produkte_auflisten",
                  "angebot_vorlagen_auflisten", "in_rohdaten"}
 SCHREIBENDE_TOOLS = {"kontakt_speichern", "kunde_aendern", "notiz_setzen", "angebotsentwurf_anlegen",
-                     "angebotsentwurf_positionen_setzen", "produkt_speichern"}
-# L4: angebotsentwurf_anlegen legt nur neu an (additiv), die übrigen Schreib-Tools überschreiben
-# bestehende Daten (E-Mail/Telefon, Kundenfelder, Notiz, Positionen, Katalogwerte).
-ADDITIVE_TOOLS = {"angebotsentwurf_anlegen"}
+                     "angebotsentwurf_positionen_setzen", "angebotsentwurf_kopf_setzen", "produkt_speichern",
+                     # Rechnungs-Tools: in der DSS-Konfiguration alle vier Rechte an
+                     "rechnungsentwurf_anlegen", "rechnungsentwurf_positionen_setzen",
+                     "rechnungsentwurf_kopf_setzen", "angebot_in_rechnung_umwandeln",
+                     "rechnung_als_versendet_markieren", "rechnung_zahlung_erfassen", "rechnung_versenden",
+                     "rechnung_stornieren"}
+# L4: angebotsentwurf_anlegen, rechnungsentwurf_anlegen und angebot_in_rechnung_umwandeln legen nur neu
+# an (additiv), die übrigen Schreib-Tools überschreiben bestehende Daten (E-Mail/Telefon, Kundenfelder,
+# Notiz, Positionen, Katalogwerte, Rechnungsstatus).
+ADDITIVE_TOOLS = {"angebotsentwurf_anlegen", "rechnungsentwurf_anlegen", "angebot_in_rechnung_umwandeln"}
 
 
 def test_readonly_hint_markiert_lesende_und_schreibende_tools(mcp_server_mod, monkeypatch):
@@ -1004,6 +1238,7 @@ def test_readonly_hint_markiert_lesende_und_schreibende_tools(mcp_server_mod, mo
     tools = asyncio.run(mcp_server_mod.baue_mcp(t.K).list_tools())
     namen = {tool.name for tool in tools}
     assert namen == LESENDE_TOOLS | SCHREIBENDE_TOOLS
+    assert len(namen) == 29                                       # 21 bisherige + 8 Rechnungs-Tools
     for tool in tools:
         if tool.name in LESENDE_TOOLS:
             assert tool.annotations is not None and tool.annotations.readOnlyHint is True
@@ -1018,6 +1253,7 @@ def test_dss_tools_zeigen_alle_argumente(mcp_server_mod, monkeypatch):
     monkeypatch.delenv("PMS_DB_PATH", raising=False)
     tools = {tool.name: tool for tool in asyncio.run(mcp_server_mod.baue_mcp(t.K).list_tools())}
     assert "angebot_vorlagen_auflisten" not in tools
+    assert len(tools) == 28                                       # ohne PMS kein Vorlagen-Tool
     assert {"anrede", "mobil", "position", "abteilung"} <= set(tools["kontakt_speichern"].parameters["properties"])
     assert "bestellt" in tools["angebote_suchen"].parameters["properties"]
     assert "verkaufsbedingungen" in tools["angebotsentwurf_anlegen"].parameters["properties"]

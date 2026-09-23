@@ -2,10 +2,14 @@
 
 *Deutsche Fassung: [README.md](README.md)*
 
-MCP server for Invoice Ninja v5. It gives Claude Desktop and other MCP clients 19 or 20 tools: 13
-or 14 for reading and 6 for writing. The only things it writes are contacts, selected master-data
-fields of customers, notes on quotes and projects, quote drafts and the product catalog. What the
-server cannot do is listed under
+> Work in progress, but already working very reliably: we use it in production with the Hermes
+> agent and the Claude Desktop app.
+
+MCP server for Invoice Ninja v5. It gives Claude Desktop and other MCP clients between 20 and 29
+tools: 13 or 14 for reading, 7 for writing and up to 8 for invoices, depending on which rights are
+enabled in `instanz.yaml`. It writes contacts, selected master-data fields of customers, notes on
+quotes and projects, quote drafts, the product catalog and, if enabled, invoices. What the server
+cannot do is listed under
 [What the MCP deliberately cannot do](#what-the-mcp-deliberately-cannot-do).
 
 Operator: Dokumentations Service Siegmund GmbH. The same code runs at DSS and at customers. The
@@ -13,6 +17,22 @@ differences live exclusively in `.env` and `instanz.yaml`.
 
 Tool names, argument names and all messages returned by the server are German, as in the code.
 English glosses are given in brackets where helpful.
+
+## Quick start with Claude Code
+
+The easiest way to set up the server is to hand this repository to Claude Code (the command-line
+version) and ask it to connect the server to your Invoice Ninja instance. Ideally, run Claude Code
+on the same computer or server as Invoice Ninja. There it can check Docker, the network and the
+API token directly. A possible prompt:
+
+```
+Set up this MCP server for my Invoice Ninja instance: create .env and instanz.yaml, read the
+custom fields via the API and suggest roles, start the container and test it with a read tool.
+```
+
+Check the API token and the suggested roles yourself before the container starts. Enable the
+invoice rights (see [instanz.yaml](#instanzyaml)) only if you really need them. The individual
+steps are described in the next section.
 
 ## Installation at a customer site
 
@@ -91,22 +111,26 @@ separately.
 | `kontakt.anrede` (salutation) | Argument `anrede` in `kontakt_speichern`, then required with the value `Herr` or `Frau`, both when creating and when changing. Output `anrede` per contact. The server instructions state the requirement |
 | `kontakt.mobil`, `.position`, `.abteilung` (mobile, position, department) | arguments of the same name in `kontakt_speichern` and output per contact in `kunde_lesen` |
 | `angebot.projektnummer` (project number) | Output `projektnummer`. The MCP never writes this field |
-| `angebot.bezeichnung` (description) | Output `bezeichnung`, searched by `angebote_suchen(text)`. Argument `bezeichnung` in `angebotsentwurf_anlegen`, then required and written to this field |
-| `angebot.bestellt` (ordered) | Output `bestellt` (true/false), filter `bestellt` in `angebote_suchen`, lock for `angebotsentwurf_positionen_setzen`. The MCP never writes this field |
-| `angebot.abgeschlossen` (closed) | Output `abgeschlossen` (true/false), lock for `angebotsentwurf_positionen_setzen`. No search filter. The MCP never writes this field |
-| `rechnung.projektnummer`, `.projektbezeichnung` | Output in `rechnungen_suchen` and `rechnung_lesen` |
-| `projekt.projektnummer` | Output `projektnummer`, project key for `projekt_lesen`, `notiz_setzen` and `in_rohdaten(projekt)`, searched by `projekte_suchen(text)`, sort order of the search results |
+| `angebot.bezeichnung` (description) | Output `bezeichnung`, searched by `angebote_suchen(text)`. Argument `bezeichnung` in `angebotsentwurf_anlegen`, then required and written to this field, and in `angebotsentwurf_kopf_setzen` |
+| `angebot.bestellt` (ordered) | Output `bestellt` (true/false), filter `bestellt` in `angebote_suchen`, lock for `angebotsentwurf_positionen_setzen` and `angebotsentwurf_kopf_setzen`. The MCP never writes this field |
+| `angebot.abgeschlossen` (closed) | Output `abgeschlossen` (true/false), lock for `angebotsentwurf_positionen_setzen` and `angebotsentwurf_kopf_setzen`. No search filter. The MCP never writes this field |
+| `rechnung.projektnummer`, `.projektbezeichnung` | Output in `rechnungen_suchen` and `rechnung_lesen`. `rechnungsentwurf_anlegen` with the `projekt` argument writes the project's number and name to these fields |
+| `projekt.projektnummer` | Output `projektnummer`, project key for `projekt_lesen`, `notiz_setzen`, `rechnungsentwurf_anlegen` and `in_rohdaten(projekt)`, searched by `projekte_suchen(text)`, sort order of the search results |
 | `projekt.name` | Source of `projektname`, without the role the IN field `name` is used |
 | `projekt.abgeschlossen` | Output `abgeschlossen` (true/false), filter `abgeschlossen` in `projekte_suchen`. The MCP never writes this field |
 | `projekt.notiz` (note) | Output `notiz`, target of `notiz_setzen` for projects. Without the role, `notiz_setzen` writes to the project's private note |
 
 Quote rules in the `angebot:` section:
 
-- `verkaufsbedingungen` (terms of sale): list of product keys. Exactly one of them is appended to
-  every draft as the last line item. Empty or missing means no terms of sale, and the
+- `verkaufsbedingungen` (terms of sale): list of product keys that count as terms of sale. At
+  most one of them is the last line item of a quote (see [Terms of sale](#terms-of-sale)).
+- `verkaufsbedingungen_muster` (terms-of-sale pattern): regular expression. Every product key in
+  the catalog that it matches also counts as terms of sale (`re.search`, case-sensitive). New terms
+  of sale are thus recognised without changing `instanz.yaml`. An invalid expression prevents
+  startup. If neither the list nor the pattern is set, the instance has no terms of sale, and the
   `verkaufsbedingungen` argument is hidden.
 - `standard_verkaufsbedingungen`: which key applies when none is given. Must be in the list.
-  Default is the first list entry.
+  Default is the first list entry. Without a list there is no default.
 - `individuell_produkt`: product key whose line items need a non-empty text (own or catalog text)
   and a price above 0. Empty means no special check.
 - `gueltig_standard_tage`, `gueltig_min_tage`, `gueltig_max_tage`: validity of new drafts in days
@@ -119,10 +143,30 @@ Quote rules in the `angebot:` section:
 In the `produkt:` section, `neue_steuerkategorie` sets the Invoice Ninja tax category (`tax_id`)
 of newly created products: 1 goods, 2 services (default), 3 digital.
 
+The `rechnungen:` (invoices) section enables the invoice tools. It has four switches, each `false`
+unless set. A value other than `true` or `false` prevents startup. A tool without its right is not
+registered at all, so the MCP client does not see it.
+
+| Key | Tools |
+|---|---|
+| `schreiben` (write) | `rechnungsentwurf_anlegen`, `rechnungsentwurf_positionen_setzen`, `rechnungsentwurf_kopf_setzen`, `angebot_in_rechnung_umwandeln` |
+| `status` | `rechnung_als_versendet_markieren`, `rechnung_zahlung_erfassen` |
+| `versenden` (send) | `rechnung_versenden` |
+| `stornieren` (cancel) | `rechnung_stornieren` |
+
+```yaml
+rechnungen:
+  schreiben: true
+  status: false
+  versenden: false
+  stornieren: false
+```
+
 The `instanz:` section holds `name` and `hinweise` (notes). Both go into the server instructions
 (MCP instructions) the client receives when connecting: "Zugriff auf das Invoice Ninja von <name>
 …" ("Access to the Invoice Ninja of <name> …"), followed by the terms of sale, validity limits,
-the salutation requirement if applicable, and finally the text from `hinweise`.
+the salutation requirement if applicable, the enabled invoice rights with the note that only drafts
+can be changed and invoices are never deleted, and finally the text from `hinweise`.
 
 If the file is missing or faulty, the server does not start. The message names the offending
 key. Checks include unknown keys, fields outside `custom_value1` to `custom_value4`, and a field
@@ -161,27 +205,41 @@ This is how the custom fields are used in DSS-Siegmund's Invoice Ninja instance.
 
 Quote rules from the same file:
 
-- Terms of sale `VKBMA` and `AKAllg`, default `VKBMA`
+- Terms of sale `VKBMA` and `AKAllg`, default `VKBMA`. In addition the pattern `^VKB`: every
+  catalog product whose key starts with `VKB` also counts as terms of sale
 - `IndLeist` is the product for individual services, it needs a text and a price
 - Drafts are valid for at least 14 and at most 60 days, 14 days if not specified
 - The pattern `AG\d+` reads the quote number from the project name in Invoice Ninja
 - New products get tax category 2 (services)
+- All four invoice rights are enabled (`schreiben`, `status`, `versenden`, `stornieren`)
 
 ## Tools
 
-20 tools (14 read, 6 write), registered in `in_mcp/server.py`. Tool names, argument names and all
-messages are German, and `instanz.yaml` does not change that.
+Up to 29 tools, registered in `in_mcp/server.py`: 14 read tools, 7 write tools and 8 invoice
+tools. Tool names, argument names and all messages are German, and `instanz.yaml` does not change
+that.
+
+How many tools a client sees depends on the configuration:
+
+| Configuration | Tools |
+|---|---|
+| without PMS connection, without invoice rights | 20 (13 read, 7 write) |
+| with PMS connection, without invoice rights | 21 |
+| additionally per invoice right | `schreiben` 4, `status` 2, `versenden` 1, `stornieren` 1 |
+| with PMS connection and all invoice rights (as at DSS) | 29 |
 
 Some arguments only appear when the matching role is assigned in `instanz.yaml`. Without the role
 the server hides them (`versteckte_argumente()` in `server.py`), because they would have no effect
 without the corresponding custom field. These arguments are marked with † below. The tool
 `angebot_vorlagen_auflisten` is only registered if `PMS_DB_PATH` is set (see
-[Optional PMS connection](#optional-pms-connection)), otherwise there are 19 tools.
+[Optional PMS connection](#optional-pms-connection)). The invoice tools are only registered if the
+matching right is enabled in the `rechnungen:` section.
 
-Annotations: read tools carry `readOnlyHint: true`. `angebotsentwurf_anlegen` only creates new
-data and carries `destructiveHint: false`. The other five write tools can overwrite existing data
-and carry `destructiveHint: true`. MCP clients use this to decide how insistently they ask for
-confirmation of a call.
+Annotations: read tools carry `readOnlyHint: true`. `angebotsentwurf_anlegen`,
+`rechnungsentwurf_anlegen` and `angebot_in_rechnung_umwandeln` only create new data and carry
+`destructiveHint: false`. All other write and invoice tools can overwrite existing data or have an
+external effect and carry `destructiveHint: true`. MCP clients use this to decide how insistently
+they ask for confirmation of a call.
 
 Read limits: per object type, the server fetches one page of at most 500 records from Invoice
 Ninja and searches it locally. For invoices and payments these are the 500 newest by date, for
@@ -352,9 +410,9 @@ tool writes nothing and asks for an unambiguous reference, for example the proje
 Creates a quote with status draft. It is neither sent nor marked as sent. The date is today, the
 recipients are the given contacts. The tool sets no custom fields except the description (role
 `angebot.bezeichnung`). Design, default texts and footer come from Invoice Ninja. The VAT of each
-line item comes from the catalog. The tool skips line items whose key is one of the
-`verkaufsbedingungen` and instead appends exactly one terms-of-sale item at the end. The answer
-states number, net, gross and validity. With a PMS connection, the draft is recorded in
+line item comes from the catalog. The tool sets terms of sale according to the rules under
+[Terms of sale](#terms-of-sale). The answer states number, net, gross, validity and the terms of
+sale that were set, with their source. With a PMS connection, the draft is recorded in
 `angebot_log`. `destructiveHint: false`.
 - `kunde` (str, required): customer number, IN ID or Mandant-Nr. (with role)
 - `kontakt_emails` (list[str], required): every address must belong to a contact of the customer,
@@ -370,8 +428,9 @@ states number, net, gross and validity. With a PMS connection, the draft is reco
 - `gueltig_bis` (str, optional): valid until, `YYYY-MM-DD`, if omitted today plus
   `gueltig_standard_tage`. Must lie between today plus `gueltig_min_tage` and today plus
   `gueltig_max_tage`
-- `verkaufsbedingungen` (str, optional) †: only if `angebot.verkaufsbedingungen` is configured.
-  One of the configured keys, if omitted `standard_verkaufsbedingungen`
+- `verkaufsbedingungen` (str, optional) †: only if `angebot.verkaufsbedingungen` or
+  `verkaufsbedingungen_muster` is configured. A key recognised as terms of sale, or `keine`
+  (none), if omitted `standard_verkaufsbedingungen`
 
 **`angebotsentwurf_positionen_setzen(angebotsnr, positionen, verkaufsbedingungen)`** (set draft line items)
 Replaces all line items of a quote. Allowed only for status draft and not archived, and with the
@@ -384,9 +443,22 @@ and after. `destructiveHint: true`.
 - `angebotsnr` (str, required)
 - `positionen` (list[dict], required): as for `angebotsentwurf_anlegen`. Without `text` the
   catalog text applies, so always send your own texts along
-- `verkaufsbedingungen` (str) †: only if `angebot.verkaufsbedingungen` is configured. If omitted,
-  the quote's existing terms of sale are kept, if there are none, `standard_verkaufsbedingungen`
-  applies
+- `verkaufsbedingungen` (str, optional) †: only if `angebot.verkaufsbedingungen` or
+  `verkaufsbedingungen_muster` is configured. A key recognised as terms of sale, or `keine`
+  (none). If omitted, the quote's existing terms of sale are kept, if there are none,
+  `standard_verkaufsbedingungen` applies
+
+**`angebotsentwurf_kopf_setzen(angebotsnr, gueltig_bis, bezeichnung, oeffentliche_notiz)`** (set draft header)
+Changes header data of a quote. The same locks as for `angebotsentwurf_positionen_setzen` apply:
+only status draft, not archived, and with the roles `angebot.bestellt` and
+`angebot.abgeschlossen` also only if neither switch is set. At least one field is required,
+fields not given stay unchanged. The answer names the changed fields. `destructiveHint: true`.
+- `angebotsnr` (str, required)
+- `gueltig_bis` (str, optional): valid until, `YYYY-MM-DD`, between today plus `gueltig_min_tage`
+  and today plus `gueltig_max_tage`
+- `bezeichnung` (str, optional) †: only with role `angebot.bezeichnung`. Cleaned up as when
+  creating, must not be empty
+- `oeffentliche_notiz` (str, optional): public note of the quote, an empty text deletes it
 
 **`produkt_speichern(produkt, text, preis, mwst)`** (save product)
 Changes an active catalog product or creates a new one. When changing, fields not given and the
@@ -402,22 +474,155 @@ Existing quotes do not change, a draft only picks up new catalog values through
 - `mwst` (str, optional): name or rate of an active tax rate in Invoice Ninja (e.g. `MwSt.` or
   `19`), must be unambiguous. Required when creating
 
+### Terms of sale
+
+Terms of sale (`Verkaufsbedingungen`) are catalog products that appear as a line item of their own
+at the end of a quote. Five rules apply to `angebotsentwurf_anlegen` and
+`angebotsentwurf_positionen_setzen`. If the instance has no terms of sale (neither
+`verkaufsbedingungen` nor `verkaufsbedingungen_muster` is set), none of the following applies.
+
+1. **Recognition:** every key from `angebot.verkaufsbedingungen` and every catalog key matched by
+   `verkaufsbedingungen_muster` counts as terms of sale. Line items are matched to these keys
+   case-insensitively.
+2. **A line item passed in takes precedence.** If `positionen` contains terms of sale, the tool
+   appends no further ones. It moves the item passed in to the end and keeps its `text`, without
+   `text` the catalog text applies. If the `verkaufsbedingungen` parameter names something else,
+   the line item still wins, and the answer notes that the parameter was ignored.
+3. **Parameter `verkaufsbedingungen`:** any key recognised under rule 1, or `keine` (none). With
+   `keine` the quote gets no terms of sale, and the existing ones are dropped as well. If omitted,
+   `angebotsentwurf_positionen_setzen` keeps the quote's existing terms of sale (the last one if
+   there are several), and if there are none, `standard_verkaufsbedingungen` applies.
+   `angebotsentwurf_anlegen` uses the default if omitted. The tool rejects an unknown key and lists
+   the recognised keys. If there is no default (only a pattern, no list) and no other source
+   applies, the tool rejects the call with "Die Verkaufsbedingungen fehlen." ("The terms of sale
+   are missing.").
+4. **At most one terms-of-sale item per quote.** If `positionen` contains several, the tool
+   rejects the call and writes nothing.
+5. **The answer names the terms of sale that were set and where they came from:** from the line
+   item list (own text or catalog text), existing ones of the quote, parameter, default, or "keine
+   Verkaufsbedingungen" (no terms of sale).
+
+The price check (price 0 for a catalog price other than 0) does not apply to terms of sale. The
+invoice tools do not use these rules: there, a terms-of-sale product is an ordinary line item at
+the position given, and nothing is appended.
+
+### Invoice tools
+
+These tools only exist if the respective right is enabled in the `rechnungen:` section of
+`instanz.yaml` (see [instanz.yaml](#instanzyaml)). For all of them:
+
+- **The invoice number is assigned on creation**, also when converting a quote. The MCP therefore
+  never deletes an invoice. A wrong invoice is cancelled. The tool descriptions instruct the client
+  to create invoices only when explicitly asked to.
+- **Only drafts can be changed** (status draft, not archived). This holds even where Invoice Ninja
+  itself would allow changes to sent invoices. The background is GoBD, the German rules for proper
+  bookkeeping: a sent invoice is no longer modified but cancelled if necessary.
+- Invoices are looked up by invoice number among the 500 newest and read fresh from Invoice Ninja
+  before every change. All locks check this current state. Deleted invoices are rejected.
+- Line items work as for quotes (catalog, VAT from the catalog, price check,
+  `individuell_produkt`), but without the terms-of-sale rules.
+
+**`rechnungsentwurf_anlegen(kunde, positionen, kontakt_emails, projekt, bestellnummer, datum, faellig, oeffentliche_notiz)`** (create invoice draft)
+Right `schreiben`. Creates an invoice with status draft, it is not sent. The answer states number,
+net and gross and reminds that the number has been assigned. `destructiveHint: false`.
+- `kunde` (str, required): customer number, IN ID or Mandant-Nr. (with role)
+- `positionen` (list[dict], required): as for `angebotsentwurf_anlegen`, all line items in the
+  order given
+- `kontakt_emails` (list[str], optional): recipients. Every address must belong to a contact of
+  the customer. Empty means recipients according to Invoice Ninja's default
+- `projekt` (str, optional): project number (with role), IN number or IN ID of a project of the
+  same customer. Links the invoice to the project and, with the roles `rechnung.projektnummer` and
+  `rechnung.projektbezeichnung`, also fills these fields
+- `bestellnummer` (str, optional): purchase order number
+- `datum`, `faellig` (str, optional): date and due date, `YYYY-MM-DD`, empty means Invoice Ninja's
+  default. The due date must not be before the invoice date
+- `oeffentliche_notiz` (str, optional): public note
+
+**`rechnungsentwurf_positionen_setzen(rechnungsnr, positionen)`** (set invoice draft line items)
+Right `schreiben`. Replaces all line items of an invoice draft. The list passed in is the complete
+new list, anything missing is removed. Call `rechnung_lesen` first. Without `text` the catalog text
+applies, discounts and extra fields of individual line items are lost. The answer states net and
+gross before and after. `destructiveHint: true`.
+- `rechnungsnr` (str, required)
+- `positionen` (list[dict], required): as for `rechnungsentwurf_anlegen`
+
+**`rechnungsentwurf_kopf_setzen(rechnungsnr, datum, faellig, bestellnummer, oeffentliche_notiz, private_notiz)`** (set invoice draft header)
+Right `schreiben`. Changes header data of an invoice draft. At least one field is required, fields
+not given stay unchanged, an empty text clears the field. The due date must not be before the
+invoice date, also checked against the stored value. `destructiveHint: true`.
+- `rechnungsnr` (str, required)
+- `datum`, `faellig` (str, optional): `YYYY-MM-DD`
+- `bestellnummer`, `oeffentliche_notiz`, `private_notiz` (str, optional): purchase order number,
+  public note, private note
+
+**`angebot_in_rechnung_umwandeln(angebotsnr)`** (convert quote to invoice)
+Right `schreiben`. Converts a quote into an invoice draft. This works with every quote, including
+one that has not been ordered, unless it has already been converted (the message then names the
+invoice) or has expired (then first extend the validity in Invoice Ninja). Invoice Ninja carries
+over line items, project, purchase order number and extra fields. Afterwards the tool reads the
+quote again and reports an error if Invoice Ninja does not confirm the conversion. The answer
+states invoice number, net and gross. `destructiveHint: false`.
+- `angebotsnr` (str, required)
+
+**`rechnung_als_versendet_markieren(rechnungsnr)`** (mark invoice as sent)
+Right `status`. Sets an invoice draft to sent, without email, for example for invoices sent by
+other means. After that the invoice is locked in the MCP. The tool reads the status again
+afterwards and reports an error if it has not changed. `destructiveHint: true`.
+- `rechnungsnr` (str, required)
+
+**`rechnung_zahlung_erfassen(rechnungsnr, betrag, datum, referenz)`** (record payment)
+Right `status`. Records a payment for a sent or partially paid invoice with an open balance. The
+answer states the remaining balance. `destructiveHint: true`.
+- `rechnungsnr` (str, required)
+- `betrag` (float, optional): amount, gross, above 0, at most the open balance, at most two decimal
+  places. If omitted, the entire open balance
+- `datum` (str, optional): `YYYY-MM-DD`, today if omitted
+- `referenz` (str, optional): e.g. payment reference or booking reference
+
+**`rechnung_versenden(rechnungsnr)`** (send invoice)
+Right `versenden`. Hands the invoice over to Invoice Ninja for sending by email to all recipients
+of the invoice. Invoice Ninja chooses the template, for overdue invoices possibly a reminder
+template. A draft is set to sent in the process. Cancelled, refunded and archived invoices are
+rejected, as are invoices without a recipient with an email address. Invoice Ninja sends through a
+queue: the answer means that Invoice Ninja has accepted the job, not that the email was delivered.
+Whether it arrived is shown in the invoice's history in Invoice Ninja. The answer names the
+recipients. `destructiveHint: true`.
+- `rechnungsnr` (str, required)
+
+**`rechnung_stornieren(rechnungsnr)`** (cancel invoice)
+Right `stornieren`. Cancels a sent or partially paid invoice, but not drafts or paid invoices. The
+tool only sets the status "storniert" (cancelled) in Invoice Ninja. It does **not** create a credit
+note or a cancellation invoice. Clarify with your accountant or tax advisor whether you need such a
+document. Payments already recorded on a partially paid invoice remain. The tool checks the status
+afterwards and reports an error if Invoice Ninja does not confirm the cancellation. Not reversible
+through the MCP. `destructiveHint: true`.
+- `rechnungsnr` (str, required)
+
 ### What the MCP deliberately cannot do
 
-No tool deletes, archives or restores anything, for any object type. The MCP sends no emails and
-changes no status. In detail:
+No tool deletes, archives or restores anything, for any object type. The MCP changes an invoice
+status only with the rights `status`, `versenden` or `stornieren`;
+`angebot_in_rechnung_umwandeln` (right `schreiben`) additionally sets the quote's status to
+"umgewandelt" (converted). It sends emails only through `rechnung_versenden`. In detail:
 
-- Invoices, payments and credits are read-only (`rechnungen_suchen`, `rechnung_lesen`,
-  `zahlungen_suchen`, `in_rohdaten` with `rechnung`, `zahlung`, `gutschrift`,
-  `wiederkehrende_rechnung`). The MCP does not create, change, send, mark as paid or cancel any of
-  them.
+- Invoices: read-only without invoice rights. With rights, the MCP creates drafts, edits them,
+  converts quotes, marks invoices as sent, records payments, sends and cancels (depending on the
+  right). It never deletes an invoice, because the number has already been assigned (GoBD). It
+  does not change sent, paid or cancelled invoices, corrections only by cancellation. It creates no
+  credit notes or cancellation invoices and does not mark an invoice as paid without a payment.
+  Recurring invoices are read-only (`in_rohdaten`).
+- Payments: only recording via `rechnung_zahlung_erfassen`, no changing, deleting or refunding.
+- Credits are read-only (`in_rohdaten`).
 - Customers: existing customers are readable. Only the fields of `kunde_aendern` and the contacts
   via `kontakt_speichern` (create and change, not delete) can be changed. The MCP does not create
   new customers.
-- Quotes are only created as drafts. Statuses are never changed: no sending or marking as sent,
-  no approving, no converting, no setting of the "ordered" or "closed" switches. On quotes that are
-  no longer drafts, the MCP changes only the private note (`notiz_setzen`). A quote's header data
-  (date, validity, recipients, discount, description) cannot be changed after creation.
+- Quotes are only created as drafts. The MCP does not send quotes, mark them as sent, approve them
+  or set the "ordered" and "closed" switches. Converting into an invoice requires the right
+  `schreiben`. On drafts, line items, validity, description and public note can be changed. A
+  quote's date, recipients and discount cannot be changed after creation. On quotes that are no
+  longer drafts, the MCP changes only the private note (`notiz_setzen`).
+- Optional line items: Invoice Ninja 5.13 has no optional line items, there is no field for them.
+  The MCP therefore does not offer them.
 - Projects: only the note is writable (`notiz_setzen`). No creating, no closing.
 - Product catalog: creating and changing text, price and VAT via `produkt_speichern`. No
   deleting, no archiving, no renaming of the key.
@@ -453,8 +658,14 @@ Without `PMS_DB_PATH` the template tool is not registered and nothing is recorde
   their portal access to third parties.
 - **`produkt_speichern` checks new product keys** against `^[\w .\-/]{1,100}$`, so that no line
   break can write a forged line into the log.
-- **`destructiveHint`** is `true` for the five write tools that can overwrite existing data (see
-  [Tools](#tools)).
+- **Sending invoices has an external effect.** An invoice sent with `rechnung_versenden` cannot be
+  recalled, and every invoice created uses up an invoice number. Enable the invoice rights only if
+  you really need them, and `versenden` only if the client is actually meant to send invoices
+  itself. Server instructions and tool descriptions tell the client to do so only when explicitly
+  asked.
+- **`destructiveHint`** is `true` for all write and invoice tools that overwrite existing data or
+  have an external effect, including sending, payments and cancellation (see [Tools](#tools)). MCP
+  clients then show a corresponding warning before the call or ask for confirmation.
 - **Tokens:** every HTTP request needs `Authorization: Bearer <token>` matching one of the
   `MCP_TOKEN_<NAME>` variables, otherwise the server answers with 401. The comparison runs in
   constant time (`hmac.compare_digest`). The name after `MCP_TOKEN_`, in lower case, appears as
