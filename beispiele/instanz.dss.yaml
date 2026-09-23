@@ -1,0 +1,42 @@
+# Invoice-Ninja-MCP der DSS-Siegmund GmbH - entspricht exakt dem Verhalten vor dem Umzug (PMS ea2d020).
+instanz:
+  name: DSS-Siegmund
+  hinweise: >-
+    Kunden werden per Kundennummer angesprochen, Angebote per Angebotsnummer (AG…), Projekte per
+    Projektnummer (P…). Verkaufsbedingungen: VKBMA für Maschinen, AKAllg allgemein (siehe
+    angebot_vorlagen_auflisten). Projektnotizen landen im Notizfeld „Termin". Versendet, bestellt und
+    abgeschlossen wird ausschließlich in PMS bzw. Invoice Ninja.
+
+rollen:
+  kunde:
+    mandant_nr: custom_value1
+  kontakt:
+    mobil: custom_value1
+    position: custom_value2
+    abteilung: custom_value3
+    anrede: custom_value4
+  angebot:
+    projektnummer: custom_value1
+    bezeichnung: custom_value2
+    bestellt: custom_value3
+    abgeschlossen: custom_value4
+  rechnung:
+    projektnummer: custom_value1
+    projektbezeichnung: custom_value2
+  projekt:
+    projektnummer: custom_value1
+    name: custom_value2
+    abgeschlossen: custom_value3
+    notiz: custom_value4
+
+angebot:
+  verkaufsbedingungen: [VKBMA, AKAllg]
+  standard_verkaufsbedingungen: VKBMA
+  individuell_produkt: IndLeist
+  gueltig_standard_tage: 14
+  gueltig_min_tage: 14
+  gueltig_max_tage: 60
+  angebotsnr_im_projektnamen: 'AG\d+'
+
+produkt:
+  neue_steuerkategorie: "2"

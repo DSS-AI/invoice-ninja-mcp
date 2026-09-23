@@ -1,0 +1,8 @@
+.env
+instanz.yaml
+docker-compose.override.yml
+data/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.log

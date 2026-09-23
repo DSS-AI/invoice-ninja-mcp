@@ -1,0 +1,18 @@
+# Startpunkt für eine Kundeninstanz: keine Rollen. Alle Custom Fields erscheinen als "zusatzfelder"
+# mit den Beschriftungen aus Invoice Ninja. Rollen nach Absprache mit dem Kunden ergänzen
+# (Vorlage: instanz.dss.yaml, Erklärung: README.md).
+instanz:
+  name: Beispiel GmbH        # Firmenname des Kunden
+  hinweise: ""
+
+rollen: {}
+
+angebot:
+  verkaufsbedingungen: []
+  gueltig_standard_tage: 30
+  gueltig_min_tage: 1
+  gueltig_max_tage: 365
+  angebotsnr_im_projektnamen: ""
+
+produkt:
+  neue_steuerkategorie: "2"

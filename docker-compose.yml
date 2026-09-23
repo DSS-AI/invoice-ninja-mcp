@@ -1,0 +1,15 @@
+# Invoice-Ninja-MCP. Instanz-spezifisch sind nur .env und instanz.yaml (siehe README).
+# Lokale Abweichungen (Container-Name, Netze, Volumes) gehören in docker-compose.override.yml.
+services:
+  in-mcp:
+    build: .
+    env_file: .env
+    environment:
+      - TZ=Europe/Berlin
+      - INSTANZ_KONFIG=/app/instanz.yaml
+    volumes:
+      - ./instanz.yaml:/app/instanz.yaml:ro
+      - ./data:/data
+    ports:
+      - "127.0.0.1:${HOST_PORT:-8539}:8539"
+    restart: unless-stopped
