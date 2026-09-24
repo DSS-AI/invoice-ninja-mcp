@@ -29,6 +29,15 @@ Custom Fields über die API auslesen und Rollen vorschlagen, Container starten u
 Lesetool testen.
 ```
 
+Für den Agenten [Hermes](https://github.com/NousResearch/hermes-agent) reicht ein Satz, wenn Claude
+Code auf dem Rechner läuft, auf dem auch Hermes läuft:
+
+```
+Klone https://github.com/DSS-AI/invoice-ninja-mcp und verbinde mein Invoice Ninja mit meinem
+Hermes: .env und instanz.yaml anlegen, Custom Fields auslesen und Rollen vorschlagen, Container
+starten, den Server im passenden Hermes-Profil eintragen und mit einem Lesetool testen.
+```
+
 Prüfen Sie das API-Token und die vorgeschlagenen Rollen selbst, bevor der Container startet. Die
 Rechnungsrechte (siehe [instanz.yaml](#instanzyaml)) sollten Sie nur freischalten, wenn Sie sie
 wirklich brauchen. Die Schritte im Einzelnen stehen im nächsten Abschnitt.
@@ -46,6 +55,9 @@ Cloudflare-Konto (Tunnel und Zero Trust Access).
    `instanz.yaml` startet der Server nicht.
 4. `mkdir -p data && sudo chown 10001 data`. Der Container läuft als UID 10001 und schreibt sein
    Log nach `data/in-mcp.log` (siehe [Sicherheit](#sicherheit)).
+   Liegt das Repo auf einer NFS- oder SMB-Freigabe, scheitert `chown` meist mit „Operation nicht
+   erlaubt“. Dann `chmod 777 data` oder `data` auf einen lokalen Pfad legen
+   (`docker-compose.override.yml`).
 5. `docker compose up -d --build`
 6. Prüfen: `docker compose logs in-mcp` zeigt `IN-MCP (<name>) startet auf Port 8539`, dahinter die
    Namen der Aufrufer und ob die PMS-Anbindung aktiv ist.
@@ -85,6 +97,54 @@ Das Leerzeichen in `Bearer …` gehört in den `env`-Block, nicht in `args` (Win
 Änderung Claude Desktop vollständig beenden und neu starten. Der Server selbst antwortet bei
 fehlendem oder falschem Token mit 401. Ein 403 in der `mcp-remote`-Logdatei kommt von Cloudflare
 Access: Dann stimmen Client-ID oder Client-Secret nicht.
+
+## Hermes einrichten
+
+Hermes spricht den Server direkt über Streamable HTTP an, `mcp-remote` ist nicht nötig. Der
+Eintrag gehört in die `config.yaml` des Profils, das die Tools bekommen soll (Hauptprofil:
+`~/.hermes/config.yaml`, sonst `profiles/<profil>/config.yaml`). In `.env` des Servers einen
+eigenen Zugang anlegen, z. B. `MCP_TOKEN_HERMES`, und denselben Wert als `IN_MCP_TOKEN` in die
+`.env` des Hermes-Profils schreiben:
+
+```yaml
+mcp_servers:
+  invoice-ninja:
+    url: "http://127.0.0.1:8539/mcp"
+    headers:
+      Authorization: "Bearer ${IN_MCP_TOKEN}"
+```
+
+Welche URL passt, hängt davon ab, wo Hermes läuft:
+
+- Hermes auf demselben Rechner, direkt installiert oder als Container mit `network_mode: host`:
+  `http://127.0.0.1:8539/mcp`. Tunnel und Cloudflare Access sind dann nicht nötig.
+- Hermes als Container im Bridge-Netz auf demselben Rechner: `127.0.0.1` ist dort der Container
+  selbst. Den Hermes-Container zusätzlich an das Compose-Netz dieses Servers hängen
+  (`docker network connect <ordnername>_default <hermes-container>`) und
+  `http://in-mcp:8539/mcp` eintragen.
+- Hermes auf einem anderen Rechner: über den Cloudflare-Tunnel wie bei Claude Desktop, mit den
+  Headern `CF-Access-Client-Id` und `CF-Access-Client-Secret` zusätzlich zu `Authorization`.
+
+Ein laufender Gateway übernimmt einen neuen Eintrag in `mcp_servers` nach etwa einer Minute ohne
+Neustart. Prüfen mit `hermes -p <profil> mcp test invoice-ninja` (beim Hauptprofil ohne `-p`): Die
+Ausgabe listet die freigeschalteten Tools. Ein 401 heißt, dass `IN_MCP_TOKEN` nicht zum Zugang in
+der `.env` des Servers passt.
+
+Die Tools allein reichen nicht, der Agent muss auch wissen, dass er sie benutzen darf:
+
+- In der `SOUL.md` des Profils steht, dass es für Invoice Ninja zuständig ist. Regeln wie „nur
+  lesen“ in einem bestehenden Profil blockieren sonst die Schreib-Tools.
+- Sind Rechnungsrechte freigeschaltet, gehört eine Freigaberegel dazu, zum Beispiel: „Bevor du eine
+  Rechnung versendest, als versendet markierst, stornierst oder eine Zahlung erfasst, nennst du
+  Rechnungsnummer, Kunde und Betrag und wartest auf ein ausdrückliches Ja.“ Mit dem Standard
+  `trust: full` ruft Hermes MCP-Tools ohne Rückfrage auf. Wer eine technische Sperre will, setzt im
+  Eintrag `trust: untrusted`: Dann fragt Hermes vor jedem schreibenden Aufruf nach. Die Lese-Tools
+  sind als `readOnlyHint` gekennzeichnet und laufen weiter ohne Rückfrage, Entwürfe dagegen
+  brauchen dann ebenfalls eine Bestätigung, weil Hermes `destructiveHint` nicht auswertet.
+- Liegt der Server bei einem Spezialisten-Profil, muss der Hauptagent das in seiner Liste der
+  Profile stehen haben, sonst gibt er Rechnungsfragen nicht dorthin weiter.
+
+Änderungen an der `SOUL.md` gelten ab der nächsten neuen Sitzung.
 
 ## instanz.yaml
 

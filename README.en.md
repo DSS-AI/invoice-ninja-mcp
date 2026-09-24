@@ -30,6 +30,15 @@ Set up this MCP server for my Invoice Ninja instance: create .env and instanz.ya
 custom fields via the API and suggest roles, start the container and test it with a read tool.
 ```
 
+For the [Hermes](https://github.com/NousResearch/hermes-agent) agent, one sentence is enough if
+Claude Code runs on the machine where Hermes runs as well:
+
+```
+Clone https://github.com/DSS-AI/invoice-ninja-mcp and connect my Invoice Ninja to my Hermes:
+create .env and instanz.yaml, read the custom fields and suggest roles, start the container, add
+the server to the matching Hermes profile and test it with a read tool.
+```
+
 Check the API token and the suggested roles yourself before the container starts. Enable the
 invoice rights (see [instanz.yaml](#instanzyaml)) only if you really need them. The individual
 steps are described in the next section.
@@ -47,6 +56,9 @@ outside a Cloudflare account (Tunnel and Zero Trust Access).
    `instanz.yaml` the server does not start.
 4. `mkdir -p data && sudo chown 10001 data`. The container runs as UID 10001 and writes its log
    to `data/in-mcp.log` (see [Security](#security)).
+   If the repository lives on an NFS or SMB share, `chown` usually fails with "Operation not
+   permitted". In that case use `chmod 777 data` or put `data` on a local path
+   (`docker-compose.override.yml`).
 5. `docker compose up -d --build`
 6. Check: `docker compose logs in-mcp` shows `IN-MCP (<name>) startet auf Port 8539` ("starts on
    port 8539"), followed by the caller names and whether the PMS connection is active.
@@ -86,6 +98,53 @@ The space in `Bearer …` belongs in the `env` block, not in `args` (Windows quo
 change, quit Claude Desktop completely and restart it. The server itself answers a missing or
 wrong token with 401. A 403 in the `mcp-remote` log file comes from Cloudflare Access: the client
 ID or client secret is wrong.
+
+## Setting up Hermes
+
+Hermes talks to the server directly over Streamable HTTP, `mcp-remote` is not needed. The entry
+belongs in the `config.yaml` of the profile that should get the tools (main profile:
+`~/.hermes/config.yaml`, otherwise `profiles/<profile>/config.yaml`). Create a separate caller in
+the server's `.env`, e.g. `MCP_TOKEN_HERMES`, and put the same value as `IN_MCP_TOKEN` into the
+Hermes profile's `.env`:
+
+```yaml
+mcp_servers:
+  invoice-ninja:
+    url: "http://127.0.0.1:8539/mcp"
+    headers:
+      Authorization: "Bearer ${IN_MCP_TOKEN}"
+```
+
+Which URL fits depends on where Hermes runs:
+
+- Hermes on the same machine, installed directly or as a container with `network_mode: host`:
+  `http://127.0.0.1:8539/mcp`. No tunnel or Cloudflare Access needed.
+- Hermes as a container in a bridge network on the same machine: there `127.0.0.1` is the
+  container itself. Additionally attach the Hermes container to this server's Compose network
+  (`docker network connect <folder-name>_default <hermes-container>`) and use
+  `http://in-mcp:8539/mcp`.
+- Hermes on another machine: through the Cloudflare Tunnel as with Claude Desktop, with the
+  headers `CF-Access-Client-Id` and `CF-Access-Client-Secret` in addition to `Authorization`.
+
+A running gateway picks up a new `mcp_servers` entry after about a minute without a restart.
+Check with `hermes -p <profile> mcp test invoice-ninja` (without `-p` for the main profile): the
+output lists the enabled tools. A 401 means `IN_MCP_TOKEN` does not match the caller in the
+server's `.env`.
+
+The tools alone are not enough, the agent also has to know it may use them:
+
+- The profile's `SOUL.md` states that it is responsible for Invoice Ninja. Rules such as "read
+  only" in an existing profile otherwise block the write tools.
+- If invoice rights are enabled, add an approval rule, for example: "Before you send an invoice,
+  mark it as sent, cancel it or record a payment, state the invoice number, customer and amount
+  and wait for an explicit yes." With the default `trust: full`, Hermes calls MCP tools without
+  asking. For a technical gate, set `trust: untrusted` in the entry: Hermes then asks before every
+  write call. The read tools carry `readOnlyHint` and keep running without a prompt, drafts on the
+  other hand then need a confirmation too, because Hermes does not evaluate `destructiveHint`.
+- If the server sits with a specialist profile, the main agent must have that in its list of
+  profiles, otherwise it does not route invoice questions there.
+
+Changes to `SOUL.md` apply from the next new session.
 
 ## instanz.yaml
 
