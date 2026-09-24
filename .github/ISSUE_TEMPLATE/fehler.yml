@@ -1,0 +1,57 @@
+name: Fehler melden / Bug report
+description: Etwas funktioniert nicht wie beschrieben. / Something doesn't work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Bitte keine Zugangsdaten, Tokens, URLs Ihrer Instanz oder Kundendaten einfügen.
+        Please do not paste credentials, tokens, instance URLs or customer data.
+  - type: textarea
+    id: beschreibung
+    attributes:
+      label: Was ist passiert? / What happened?
+      description: Welches Tool, welche Eingabe, welche Meldung? / Which tool, which input, which message?
+    validations:
+      required: true
+  - type: textarea
+    id: erwartet
+    attributes:
+      label: Was haben Sie erwartet? / What did you expect?
+    validations:
+      required: true
+  - type: input
+    id: in_version
+    attributes:
+      label: Invoice-Ninja-Version / Invoice Ninja version
+      description: z. B. / e.g. 5.13.43 (Einstellungen → Kontoverwaltung / Settings → Account Management)
+    validations:
+      required: true
+  - type: input
+    id: mcp_stand
+    attributes:
+      label: Stand dieses Repos / Version of this repo
+      description: Commit oder Datum / commit or date
+  - type: dropdown
+    id: client
+    attributes:
+      label: MCP-Client
+      options:
+        - Claude Desktop
+        - Claude Code
+        - Hermes
+        - anderer / other
+    validations:
+      required: true
+  - type: textarea
+    id: konfig
+    attributes:
+      label: Rollen und Rechte aus instanz.yaml / Roles and rights from instanz.yaml
+      description: Abschnitte `rollen`, `angebot`, `rechnungen` (ohne `hinweise`, falls vertraulich) / sections `rollen`, `angebot`, `rechnungen`
+      render: yaml
+  - type: textarea
+    id: log
+    attributes:
+      label: Log-Auszug / Log excerpt
+      description: Relevante Zeilen aus `docker compose logs in-mcp`, bereinigt / relevant lines, redacted
+      render: text

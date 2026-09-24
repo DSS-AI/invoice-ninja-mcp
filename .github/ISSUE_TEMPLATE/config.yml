@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Fragen und Einrichtung / Questions and setup
+    url: https://github.com/DSS-AI/invoice-ninja-mcp/discussions
+    about: Fragen zur Einrichtung, Erfahrungen und Ideen bitte in den Discussions. / Please use Discussions for setup questions, experiences and ideas.

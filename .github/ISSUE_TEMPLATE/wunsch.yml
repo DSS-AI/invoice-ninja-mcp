@@ -1,0 +1,31 @@
+name: Funktionswunsch / Feature request
+description: Ein neues Tool oder eine Erweiterung vorschlagen. / Suggest a new tool or an extension.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: anliegen
+    attributes:
+      label: Was möchten Sie mit dem MCP tun können? / What would you like to do with the MCP?
+      description: Beschreiben Sie den Arbeitsablauf, nicht nur das Tool. / Describe the workflow, not just the tool.
+    validations:
+      required: true
+  - type: textarea
+    id: in_objekte
+    attributes:
+      label: Betroffene Invoice-Ninja-Objekte / Invoice Ninja entities involved
+      description: z. B. Angebote, Rechnungen, Aufgaben, Ausgaben / e.g. quotes, invoices, tasks, expenses
+  - type: dropdown
+    id: art
+    attributes:
+      label: Art / Type
+      options:
+        - nur lesen / read only
+        - schreiben / write
+        - beides / both
+    validations:
+      required: true
+  - type: textarea
+    id: risiko
+    attributes:
+      label: Außenwirkung oder Risiken? / External effects or risks?
+      description: Verschickt es etwas, ändert es Buchhaltungsdaten? / Does it send anything or change accounting data?
