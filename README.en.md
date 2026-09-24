@@ -235,10 +235,12 @@ without the corresponding custom field. These arguments are marked with † belo
 [Optional PMS connection](#optional-pms-connection)). The invoice tools are only registered if the
 matching right is enabled in the `rechnungen:` section.
 
-Annotations: read tools carry `readOnlyHint: true`. `angebotsentwurf_anlegen`,
-`rechnungsentwurf_anlegen` and `angebot_in_rechnung_umwandeln` only create new data and carry
-`destructiveHint: false`. All other write and invoice tools can overwrite existing data or have an
-external effect and carry `destructiveHint: true`. MCP clients use this to decide how insistently
+Annotations: read tools carry `readOnlyHint: true`. Among the write and invoice tools,
+`destructiveHint: false` is used for what has no external effect, is reversible and does not
+overwrite master data - creating and changing quote and invoice drafts, converting a quote into an
+invoice, and `notiz_setzen`. All other write and invoice tools have an external effect (sending),
+are not reversible (cancellation) or overwrite master data (customer, contact, product) and carry
+`destructiveHint: true`. MCP clients use this to decide how insistently
 they ask for confirmation of a call.
 
 Read limits: per object type, the server fetches one page of at most 500 records from Invoice
@@ -398,7 +400,7 @@ Writes a note on a quote or a project. For quotes this is the private note, rega
 so also on sent or archived quotes. For projects it is the field of the role `projekt.notiz`,
 without the role the project's private note. If `ziel` matches both a quote and a project, the
 tool writes nothing and asks for an unambiguous reference, for example the project's IN ID.
-`destructiveHint: true`.
+`destructiveHint: false`.
 - `ziel` (str, required): quote number, or for projects the project number (with role), IN number
   or IN ID
 - `text` (str, required): must not be empty
@@ -439,7 +441,7 @@ passed in is the complete new list in the desired order, anything missing is rem
 `angebot_lesen` first. Per line item only product, text, quantity, price and the VAT from the
 catalog are written, discounts and other fields of individual line items are lost. Header,
 recipients and custom fields of the quote stay unchanged. The answer states net and gross before
-and after. `destructiveHint: true`.
+and after. `destructiveHint: false`.
 - `angebotsnr` (str, required)
 - `positionen` (list[dict], required): as for `angebotsentwurf_anlegen`. Without `text` the
   catalog text applies, so always send your own texts along
@@ -452,7 +454,7 @@ and after. `destructiveHint: true`.
 Changes header data of a quote. The same locks as for `angebotsentwurf_positionen_setzen` apply:
 only status draft, not archived, and with the roles `angebot.bestellt` and
 `angebot.abgeschlossen` also only if neither switch is set. At least one field is required,
-fields not given stay unchanged. The answer names the changed fields. `destructiveHint: true`.
+fields not given stay unchanged. The answer names the changed fields. `destructiveHint: false`.
 - `angebotsnr` (str, required)
 - `gueltig_bis` (str, optional): valid until, `YYYY-MM-DD`, between today plus `gueltig_min_tage`
   and today plus `gueltig_max_tage`
@@ -542,14 +544,14 @@ net and gross and reminds that the number has been assigned. `destructiveHint: f
 Right `schreiben`. Replaces all line items of an invoice draft. The list passed in is the complete
 new list, anything missing is removed. Call `rechnung_lesen` first. Without `text` the catalog text
 applies, discounts and extra fields of individual line items are lost. The answer states net and
-gross before and after. `destructiveHint: true`.
+gross before and after. `destructiveHint: false`.
 - `rechnungsnr` (str, required)
 - `positionen` (list[dict], required): as for `rechnungsentwurf_anlegen`
 
 **`rechnungsentwurf_kopf_setzen(rechnungsnr, datum, faellig, bestellnummer, oeffentliche_notiz, private_notiz)`** (set invoice draft header)
 Right `schreiben`. Changes header data of an invoice draft. At least one field is required, fields
 not given stay unchanged, an empty text clears the field. The due date must not be before the
-invoice date, also checked against the stored value. `destructiveHint: true`.
+invoice date, also checked against the stored value. `destructiveHint: false`.
 - `rechnungsnr` (str, required)
 - `datum`, `faellig` (str, optional): `YYYY-MM-DD`
 - `bestellnummer`, `oeffentliche_notiz`, `private_notiz` (str, optional): purchase order number,
@@ -663,9 +665,11 @@ Without `PMS_DB_PATH` the template tool is not registered and nothing is recorde
   you really need them, and `versenden` only if the client is actually meant to send invoices
   itself. Server instructions and tool descriptions tell the client to do so only when explicitly
   asked.
-- **`destructiveHint`** is `true` for all write and invoice tools that overwrite existing data or
-  have an external effect, including sending, payments and cancellation (see [Tools](#tools)). MCP
-  clients then show a corresponding warning before the call or ask for confirmation.
+- **`destructiveHint`** is `true` for all write and invoice tools that have an external effect,
+  are not reversible, or overwrite master data, including sending, payments and cancellation (see
+  [Tools](#tools)). MCP clients then show a corresponding warning before the call or ask for
+  confirmation. `false` does not mean "unimportant", only that it is no reason to ask for
+  confirmation again on every call.
 - **Tokens:** every HTTP request needs `Authorization: Bearer <token>` matching one of the
   `MCP_TOKEN_<NAME>` variables, otherwise the server answers with 401. The comparison runs in
   constant time (`hmac.compare_digest`). The name after `MCP_TOKEN_`, in lower case, appears as

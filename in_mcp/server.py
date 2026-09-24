@@ -29,9 +29,12 @@ TOKEN_PRAEFIX = "MCP_TOKEN_"
 TOKENS: dict[str, str] = {}   # main() füllt; die Middleware liest zur Laufzeit
 
 LESEND = {"readOnlyHint": True}
-# L4: additiv (legt nur neu an) vs. überschreibend - MCP-Clients nutzen destructiveHint, um zu
-# entscheiden, wie nachdrücklich sie einen Tool-Aufruf bestätigen lassen.
-SCHREIBEND_ADDITIV = {"readOnlyHint": False, "destructiveHint": False}
+# L4: destructiveHint ist für MCP-Clients (z. B. Claude Desktop) ein Bestätigungs-Signal - true
+# löst dort bei jedem Aufruf eine erneute Rückfrage aus, auch nach "Always allow". Destruktiv im
+# Sinn dieser Unterscheidung ist ein Tool mit Wirkung nach außen (E-Mail-Versand), Unumkehrbarem
+# (Storno) oder Überschreiben von Stammdaten (Kunde, Kontakt, Produkt). Entwurfsfelder ändern und
+# Notizen anhängen/ersetzen zählt nicht dazu, auch wenn dabei bestehender Text ersetzt wird.
+SCHREIBEND_NICHT_DESTRUKTIV = {"readOnlyHint": False, "destructiveHint": False}
 SCHREIBEND = {"readOnlyHint": False, "destructiveHint": True}
 
 
@@ -398,14 +401,16 @@ LESE_TOOLS = (kunden_suchen, kunde_lesen, angebote_suchen, angebot_lesen, projek
               produkte_auflisten, angebot_vorlagen_auflisten, in_rohdaten)
 SCHREIB_TOOLS = (kontakt_speichern, kunde_aendern, notiz_setzen, angebotsentwurf_anlegen,
                  angebotsentwurf_positionen_setzen, angebotsentwurf_kopf_setzen, produkt_speichern)
-# L4: angebotsentwurf_anlegen legt nur neu an (additiv); die übrigen Schreib-Tools überschreiben
-# bestehende Daten.
 # Rechnungs-Tools: nur registriert, wenn das Recht in instanz.yaml (Abschnitt rechnungen) an ist.
 RECHNUNGS_TOOLS = {rechnungsentwurf_anlegen: "schreiben", rechnungsentwurf_positionen_setzen: "schreiben",
                    rechnungsentwurf_kopf_setzen: "schreiben", angebot_in_rechnung_umwandeln: "schreiben",
                    rechnung_als_versendet_markieren: "status", rechnung_zahlung_erfassen: "status",
                    rechnung_versenden: "versenden", rechnung_stornieren: "stornieren"}
-ADDITIV_TOOLS = (angebotsentwurf_anlegen, rechnungsentwurf_anlegen, angebot_in_rechnung_umwandeln)
+# L4: nicht destruktiv (kein Effekt nach außen, umkehrbar, keine Stammdaten) vs. destruktiv - siehe
+# Kommentar bei SCHREIBEND_NICHT_DESTRUKTIV oben.
+NICHT_DESTRUKTIV = (angebotsentwurf_anlegen, angebotsentwurf_positionen_setzen, angebotsentwurf_kopf_setzen,
+                    rechnungsentwurf_anlegen, rechnungsentwurf_positionen_setzen, rechnungsentwurf_kopf_setzen,
+                    angebot_in_rechnung_umwandeln, notiz_setzen)
 
 
 def versteckte_argumente(k: konfig.Konfig) -> dict[str, list[str]]:
@@ -467,8 +472,8 @@ def baue_mcp(k: konfig.Konfig) -> FastMCP:
             continue
         if fn in LESE_TOOLS:
             annotations = LESEND
-        elif fn in ADDITIV_TOOLS:
-            annotations = SCHREIBEND_ADDITIV
+        elif fn in NICHT_DESTRUKTIV:
+            annotations = SCHREIBEND_NICHT_DESTRUKTIV
         else:
             annotations = SCHREIBEND
         tool = Tool.from_function(fn, annotations=annotations)

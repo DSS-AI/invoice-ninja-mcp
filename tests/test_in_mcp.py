@@ -1224,10 +1224,13 @@ SCHREIBENDE_TOOLS = {"kontakt_speichern", "kunde_aendern", "notiz_setzen", "ange
                      "rechnungsentwurf_kopf_setzen", "angebot_in_rechnung_umwandeln",
                      "rechnung_als_versendet_markieren", "rechnung_zahlung_erfassen", "rechnung_versenden",
                      "rechnung_stornieren"}
-# L4: angebotsentwurf_anlegen, rechnungsentwurf_anlegen und angebot_in_rechnung_umwandeln legen nur neu
-# an (additiv), die übrigen Schreib-Tools überschreiben bestehende Daten (E-Mail/Telefon, Kundenfelder,
-# Notiz, Positionen, Katalogwerte, Rechnungsstatus).
-ADDITIVE_TOOLS = {"angebotsentwurf_anlegen", "rechnungsentwurf_anlegen", "angebot_in_rechnung_umwandeln"}
+# L4: destructiveHint false = kein Effekt nach außen, umkehrbar, keine Stammdaten (Entwürfe
+# anlegen/ändern, Notiz anhängen/ersetzen); destructiveHint true bleibt für Außenwirkung (Versand),
+# Unumkehrbares (Storno) und Stammdaten-Überschreiben (Kunde, Kontakt, Produkt).
+NICHT_DESTRUKTIV = {"angebotsentwurf_anlegen", "angebotsentwurf_positionen_setzen",
+                    "angebotsentwurf_kopf_setzen", "rechnungsentwurf_anlegen",
+                    "rechnungsentwurf_positionen_setzen", "rechnungsentwurf_kopf_setzen",
+                    "angebot_in_rechnung_umwandeln", "notiz_setzen"}
 
 
 def test_readonly_hint_markiert_lesende_und_schreibende_tools(mcp_server_mod, monkeypatch):
@@ -1244,7 +1247,7 @@ def test_readonly_hint_markiert_lesende_und_schreibende_tools(mcp_server_mod, mo
             assert tool.annotations is not None and tool.annotations.readOnlyHint is True
         else:
             assert tool.annotations is not None and tool.annotations.readOnlyHint is False
-            erwartet = tool.name not in ADDITIVE_TOOLS
+            erwartet = tool.name not in NICHT_DESTRUKTIV
             assert tool.annotations.destructiveHint is erwartet
 
 

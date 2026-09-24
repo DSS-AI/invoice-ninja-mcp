@@ -236,11 +236,13 @@ zugehörige Custom Field keine Wirkung hätten. Diese Argumente sind unten mit �
 [Optionale PMS-Anbindung](#optionale-pms-anbindung)). Die Rechnungs-Tools werden nur registriert,
 wenn das passende Recht im Abschnitt `rechnungen:` freigeschaltet ist.
 
-Annotationen: Lese-Tools tragen `readOnlyHint: true`. `angebotsentwurf_anlegen`,
-`rechnungsentwurf_anlegen` und `angebot_in_rechnung_umwandeln` legen nur neu an und tragen
-`destructiveHint: false`. Alle übrigen Schreib- und Rechnungs-Tools können bestehende Daten
-überschreiben oder wirken nach außen und tragen `destructiveHint: true`. MCP-Clients entscheiden
-damit, wie nachdrücklich sie einen Aufruf bestätigen lassen.
+Annotationen: Lese-Tools tragen `readOnlyHint: true`. Bei den Schreib- und Rechnungs-Tools trägt
+`destructiveHint: false`, was ohne Wirkung nach außen und umkehrbar ist und keine Stammdaten
+überschreibt - das Anlegen und Ändern von Angebots- und Rechnungsentwürfen, das Umwandeln eines
+Angebots in eine Rechnung sowie `notiz_setzen`. Alle übrigen Schreib- und Rechnungs-Tools wirken
+nach außen (Versand), sind nicht umkehrbar (Storno) oder überschreiben Stammdaten (Kunde, Kontakt,
+Produkt) und tragen `destructiveHint: true`. MCP-Clients entscheiden damit, wie nachdrücklich sie
+einen Aufruf bestätigen lassen.
 
 Grenzen beim Lesen: Der Server holt je Objektart eine Seite mit höchstens 500 Datensätzen aus
 Invoice Ninja und sucht darin lokal. Bei Rechnungen und Zahlungen sind das die 500 neuesten nach
@@ -405,7 +407,7 @@ Schreibt eine Notiz an ein Angebot oder ein Projekt. Bei Angeboten ist das die p
 zwar unabhängig vom Status, also auch bei versendeten oder archivierten Angeboten. Bei Projekten
 ist es das Feld der Rolle `projekt.notiz`, ohne Rolle die private Notiz des Projekts. Passt `ziel`
 sowohl auf ein Angebot als auch auf ein Projekt, schreibt das Tool nichts und verlangt eine
-eindeutige Angabe, zum Beispiel die IN-ID des Projekts. `destructiveHint: true`.
+eindeutige Angabe, zum Beispiel die IN-ID des Projekts. `destructiveHint: false`.
 - `ziel` (str, Pflicht): Angebotsnummer, oder für Projekte Projektnummer (mit Rolle), IN-Nummer oder
   IN-ID
 - `text` (str, Pflicht): darf nicht leer sein
@@ -444,7 +446,7 @@ Schalter gesetzt ist. Die übergebene Liste ist die komplette neue Liste in der 
 Reihenfolge, was fehlt, wird entfernt. Vorher `angebot_lesen` aufrufen. Geschrieben werden je
 Position nur Produkt, Text, Menge, Preis und MwSt. aus dem Katalog, Rabatte und andere Felder
 einzelner Positionen gehen verloren. Kopf, Empfänger und Custom Fields des Angebots bleiben
-unverändert. Die Antwort nennt Netto und Brutto vorher und nachher. `destructiveHint: true`.
+unverändert. Die Antwort nennt Netto und Brutto vorher und nachher. `destructiveHint: false`.
 - `angebotsnr` (str, Pflicht)
 - `positionen` (list[dict], Pflicht): wie bei `angebotsentwurf_anlegen`. Ohne `text` gilt der
   Katalogtext, eigene Texte also immer mitschicken
@@ -458,7 +460,7 @@ unverändert. Die Antwort nennt Netto und Brutto vorher und nachher. `destructiv
 `angebotsentwurf_positionen_setzen`: nur Status Entwurf, nicht archiviert, mit den Rollen
 `angebot.bestellt` und `angebot.abgeschlossen` außerdem nur, wenn keiner der beiden Schalter
 gesetzt ist. Mindestens ein Feld ist Pflicht, nicht angegebene Felder bleiben unverändert. Die
-Antwort nennt die geänderten Felder. `destructiveHint: true`.
+Antwort nennt die geänderten Felder. `destructiveHint: false`.
 - `angebotsnr` (str, Pflicht)
 - `gueltig_bis` (str, optional): `JJJJ-MM-TT`, zwischen heute plus `gueltig_min_tage` und heute
   plus `gueltig_max_tage`
@@ -550,7 +552,7 @@ nennt Nummer, Netto und Brutto und erinnert daran, dass die Nummer vergeben ist.
 Recht `schreiben`. Ersetzt alle Positionen eines Rechnungsentwurfs. Die übergebene Liste ist die
 komplette neue Liste, was fehlt, wird entfernt. Vorher `rechnung_lesen` aufrufen. Ohne `text` gilt
 der Katalogtext, Rabatte und Zusatzfelder einzelner Positionen gehen verloren. Die Antwort nennt
-Netto und Brutto vorher und nachher. `destructiveHint: true`.
+Netto und Brutto vorher und nachher. `destructiveHint: false`.
 - `rechnungsnr` (str, Pflicht)
 - `positionen` (list[dict], Pflicht): wie bei `rechnungsentwurf_anlegen`
 
@@ -558,7 +560,7 @@ Netto und Brutto vorher und nachher. `destructiveHint: true`.
 Recht `schreiben`. Ändert Kopfdaten eines Rechnungsentwurfs. Mindestens ein Feld ist Pflicht,
 nicht angegebene Felder bleiben unverändert, ein leerer Text leert das Feld. Die Fälligkeit darf
 nicht vor dem Rechnungsdatum liegen, geprüft auch gegen den gespeicherten Wert.
-`destructiveHint: true`.
+`destructiveHint: false`.
 - `rechnungsnr` (str, Pflicht)
 - `datum`, `faellig` (str, optional): `JJJJ-MM-TT`
 - `bestellnummer`, `oeffentliche_notiz`, `private_notiz` (str, optional)
@@ -675,10 +677,11 @@ Ohne `PMS_DB_PATH` wird das Vorlagen-Tool nicht registriert und es wird nichts p
   die Rechnungsrechte deshalb nur frei, wenn Sie sie wirklich brauchen, und `versenden` nur, wenn
   der Client Rechnungen tatsächlich selbst verschicken soll. Server-Hinweise und
   Tool-Beschreibungen weisen den Client an, das nur auf ausdrücklichen Wunsch zu tun.
-- **`destructiveHint`** ist bei allen Schreib- und Rechnungs-Tools `true`, die bestehende Daten
-  überschreiben oder nach außen wirken, also auch bei Versand, Zahlung und Storno (siehe
-  [Tools](#tools)). MCP-Clients zeigen dann vor dem Aufruf einen entsprechenden Hinweis oder lassen
-  ihn bestätigen.
+- **`destructiveHint`** ist bei allen Schreib- und Rechnungs-Tools mit Wirkung nach außen,
+  Unumkehrbarem oder Stammdaten-Überschreiben `true`, also auch bei Versand, Zahlung und Storno
+  (siehe [Tools](#tools)). MCP-Clients zeigen dann vor dem Aufruf einen entsprechenden Hinweis oder
+  lassen ihn bestätigen. `false` heißt nicht "unwichtig", nur: kein Grund für eine erneute
+  Rückfrage bei jedem Aufruf.
 - **Tokens:** Jede HTTP-Anfrage braucht `Authorization: Bearer <token>`, passend zu einer der
   Variablen `MCP_TOKEN_<NAME>`, sonst antwortet der Server mit 401. Der Vergleich läuft in
   konstanter Zeit (`hmac.compare_digest`). Der Name hinter `MCP_TOKEN_`, klein geschrieben,

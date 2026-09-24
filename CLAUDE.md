@@ -24,7 +24,11 @@ vorher Teil von DSS-PMS (`mcp_server.py`, `services/in_mcp_tools.py`, bis Commit
 - **Tool-Zahl:** `LESE_TOOLS` 14 (ohne `PMS_DB_PATH` 13), `SCHREIB_TOOLS` 7, `RECHNUNGS_TOOLS` 8
   (`schreiben` 4, `status` 2, `versenden` 1, `stornieren` 1). Also 20 bis 29, DSS-Referenz 29.
   README (DE + EN) nennt die Zahlen; bei neuen Tools dort und in `anweisungen()` nachziehen.
-  `destructiveHint: false` nur für `ADDITIV_TOOLS` (Angebots-/Rechnungsentwurf anlegen, umwandeln)
+  `destructiveHint: false` für `NICHT_DESTRUKTIV` in `server.py`: Entwürfe anlegen/ändern
+  (Angebot, Rechnung, deren Positionen/Kopf), Umwandeln, `notiz_setzen` - kein Effekt nach außen,
+  umkehrbar, keine Stammdaten. `true` bleibt für Versand, Zahlung, Storno, Stammdaten (Kunde,
+  Kontakt, Produkt) - Claude Desktop fragt bei `true` bei jedem Aufruf erneut nach, auch nach
+  "Always allow", darum die Trennung (Entscheidung 24.09.2026)
 - **Rechte-Block `rechnungen:`** in instanz.yaml (`schreiben`, `status`, `versenden`,
   `stornieren`, Default alle `false`, nur bool). `baue_mcp()` registriert ein Rechnungs-Tool nur mit
   `k.rechnungen_erlaubt(recht)`, Zuordnung in `RECHNUNGS_TOOLS`. `anweisungen()` nennt die

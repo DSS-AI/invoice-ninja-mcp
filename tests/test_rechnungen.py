@@ -488,7 +488,10 @@ RECHNUNGS_TOOLS = {
     "rechnungsentwurf_kopf_setzen": "schreiben", "angebot_in_rechnung_umwandeln": "schreiben",
     "rechnung_als_versendet_markieren": "status", "rechnung_zahlung_erfassen": "status",
     "rechnung_versenden": "versenden", "rechnung_stornieren": "stornieren"}
-ADDITIV = {"rechnungsentwurf_anlegen", "angebot_in_rechnung_umwandeln"}
+# L4: destructiveHint false = kein Effekt nach außen, umkehrbar, keine Stammdaten - siehe
+# server.py (NICHT_DESTRUKTIV). rechnungsentwurf_positionen_setzen/-kopf_setzen ändern nur Entwürfe.
+NICHT_DESTRUKTIV = {"rechnungsentwurf_anlegen", "rechnungsentwurf_positionen_setzen",
+                    "rechnungsentwurf_kopf_setzen", "angebot_in_rechnung_umwandeln"}
 
 
 def _tools(k):
@@ -502,7 +505,7 @@ def test_dss_registriert_alle_rechnungs_tools_mit_hinweisen():
     assert set(RECHNUNGS_TOOLS) <= set(tools)
     for name in RECHNUNGS_TOOLS:
         a = tools[name].annotations
-        assert a.readOnlyHint is False and a.destructiveHint is (name not in ADDITIV)
+        assert a.readOnlyHint is False and a.destructiveHint is (name not in NICHT_DESTRUKTIV)
 
 
 def test_neutral_registriert_kein_rechnungs_tool(neutral):
