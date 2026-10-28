@@ -54,3 +54,6 @@ vorher Teil von DSS-PMS (`mcp_server.py`, `services/in_mcp_tools.py`, bis Commit
 - **Öffentliche Fassung:** `github.com/DSS-AI/invoice-ninja-mcp` (MIT, eigene Historie). Übertrag nur mit
   `scripts/veroeffentlichen.sh` (prüft auf interne Angaben, fragt vor dem Push; das Skript ist nur im
   Arbeits-Repo vorhanden). Nie die Historie dieses Repos ins öffentliche pushen
+  **Nie direkt im öffentlichen Repo committen:** `veroeffentlichen.sh` ersetzt den öffentlichen Stand
+  vollständig und löscht solche Änderungen. Ist es doch passiert, zuerst ins private Repo zurückholen
+  (Fall 24.09.2026: Hermes-Abschnitt, zurückgeholt am 28.10.2026 mit `eac04c1`)
