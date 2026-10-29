@@ -27,7 +27,6 @@ def neutral_mock(neutral, monkeypatch):
     monkeypatch.setattr(t.nn, "get_quotes_listing", lambda: copy.deepcopy(stand["quotes"]))
     monkeypatch.setattr(t.nn, "get_projects_listing", lambda: copy.deepcopy(stand["projects"]))
     monkeypatch.setattr(t.nn, "get_invoices_listing", lambda: copy.deepcopy(stand["invoices"]))
-    monkeypatch.setattr(t.nn, "get_invoices_for_project", lambda pid: [])
     monkeypatch.setattr(t.nn, "get_custom_field_labels", lambda: {
         "client1": "Kostenstelle", "contact1": "Bereich", "invoice1": "Vorgang", "project1": "Auftrag"})
 
@@ -109,6 +108,15 @@ def test_projekt_ohne_rollen(neutral_mock):
         t.projekt_lesen("A-1")                        # custom_value1 ist keine Projektnummer
     assert [x["in_nummer"] for x in t.projekte_suchen()["treffer"]] == ["0007"]
 
+
+def test_projekt_rechnungen_ohne_rollen_nur_project_id(neutral_mock):
+    neutral_mock["projects"] = [_projekt()]
+    neutral_mock["invoices"] = [
+        {"number": "R-1", "date": "2026-09-01", "amount": 100, "status_id": "2", "project_id": "p1"},
+        {"number": "R-2", "date": "2026-09-02", "amount": 200, "status_id": "2", "project_id": "",
+         "custom_value1": "A-1"},                     # ohne Rolle ist custom_value1 keine Projektnummer
+    ]
+    assert [r["rechnungsnr"] for r in t.projekt_lesen("0007")["rechnungen"]] == ["R-1"]
 
 def test_rechnung_ohne_rollen(neutral_mock):
     neutral_mock["invoices"] = [{"id": "i1", "number": "R-1", "status_id": "2", "date": "2026-09-01",

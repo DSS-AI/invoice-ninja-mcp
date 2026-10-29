@@ -464,8 +464,18 @@ def projekt_lesen(projekt: str) -> dict:
     erg["rechnungen"] = [{"rechnungsnr": r.get("number", ""), "datum": r.get("date", ""),
                           "brutto": round(float(r.get("amount") or 0), 2),
                           "status": INVOICE_STATUS.get(str(r.get("status_id")), str(r.get("status_id")))}
-                         for r in nn.get_invoices_for_project(p["id"])]
+                         for r in _rechnungen_zum_projekt(p["id"], erg.get("projektnummer", ""))]
     return erg
+
+
+def _rechnungen_zum_projekt(projekt_id: str, projektnummer: str) -> list[dict]:
+    # IN verknüpft die meisten Rechnungen nicht über project_id, die Projektnummer steht dann nur im
+    # Rollenfeld der Rechnung (bei DSS 84 von 110 am 28.10.2026) – darum über beides zuordnen
+    feld_ = K.feld("rechnung", "projektnummer")
+    nr = (projektnummer or "").strip()
+    return [i for i in nn.get_invoices_listing() if not i.get("is_deleted")
+            and (i.get("project_id") == projekt_id
+                 or (feld_ and nr and (i.get(feld_) or "").strip() == nr))]
 
 
 # --- Rechnungen, Katalog ---------------------------------------------------------

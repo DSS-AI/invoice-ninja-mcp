@@ -19,32 +19,6 @@ def _schreib_header(token: str) -> dict:
     return {"X-API-Token": token, "Content-Type": "application/json", "Accept": "application/json"}
 
 
-def get_invoices_for_project(project_id: str) -> list[dict]:
-    """Lädt alle Rechnungen eines Projekts aus Invoice Ninja."""
-    url, token = _get_config()
-    if not url or not token or not project_id:
-        return []
-    resp = requests.get(
-        f"{url}/api/v1/invoices",
-        headers={"X-API-Token": token},
-        params={"project_id": project_id, "per_page": 100},
-        timeout=15,
-    )
-    resp.raise_for_status()
-    invoices = []
-    for inv in resp.json().get("data", []):
-        if inv.get("project_id") != project_id:
-            continue
-        invoices.append({
-            "id": inv.get("id", ""),
-            "number": inv.get("number", ""),
-            "date": inv.get("date", ""),
-            "amount": inv.get("amount", 0),
-            "status_id": inv.get("status_id", 0),
-        })
-    return invoices
-
-
 def update_project(project_id: str, felder: dict) -> bool:
     """Schreibt einzelne Projektfelder (IN-MCP notiz_setzen); nicht übergebene bleiben unverändert."""
     url, token = _get_config()

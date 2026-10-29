@@ -61,7 +61,6 @@ def in_mock(monkeypatch):
     monkeypatch.setattr(t.nn, "get_quotes_listing", lambda: copy.deepcopy(stand["quotes"]))
     monkeypatch.setattr(t.nn, "get_projects_listing", lambda: copy.deepcopy(stand["projects"]))
     monkeypatch.setattr(t.nn, "get_invoices_listing", lambda: copy.deepcopy(stand["invoices"]))
-    monkeypatch.setattr(t.nn, "get_invoices_for_project", lambda pid: [])
     monkeypatch.setattr(t.nn, "get_payments_listing", lambda: copy.deepcopy(stand["payments"]))
     monkeypatch.setattr(t.nn, "get_vendors_listing", lambda: copy.deepcopy(stand["vendors"]))
     monkeypatch.setattr(t.nn, "get_entity_documents", lambda pfad, eid: copy.deepcopy(stand["documents"]))
@@ -262,10 +261,29 @@ def test_projekt_lesen_rechnungen_runden_brutto(in_mock, monkeypatch):
          "custom_value2": "RB Presse", "custom_value3": "", "custom_value4": "",
          "archived_at": 0, "is_deleted": False, "client": {"name": "Muster GmbH", "number": "70001"}},
     ]
-    monkeypatch.setattr(t.nn, "get_invoices_for_project", lambda pid: [
-        {"number": "RG1", "date": "2026-09-01", "amount": 1190.006, "status_id": "2"}])
+    in_mock["invoices"] = [
+        {"number": "RG1", "date": "2026-09-01", "amount": 1190.006, "status_id": "2", "project_id": "p1"}]
     r = t.projekt_lesen("P260010")["rechnungen"][0]
     assert r["brutto"] == 1190.01
+
+
+def test_projekt_lesen_rechnungen_ueber_projektnummer(in_mock):
+    # IN verknüpft die meisten Rechnungen nicht über project_id, die Projektnummer steht nur im Rollenfeld
+    in_mock["projects"] = [
+        {"id": "p1", "name": "Angebot # AG1260001 [Muster GmbH]", "custom_value1": "P260010",
+         "custom_value2": "RB Presse", "custom_value3": "", "custom_value4": "",
+         "archived_at": 0, "is_deleted": False, "client": {"name": "Muster GmbH", "number": "70001"}},
+    ]
+    in_mock["invoices"] = [
+        {"number": "RG1", "date": "2026-09-01", "amount": 100, "status_id": "2", "project_id": "p1"},
+        {"number": "RG2", "date": "2026-10-01", "amount": 200, "status_id": "4", "project_id": "",
+         "custom_value1": "P260010"},
+        {"number": "RG3", "date": "2026-10-02", "amount": 300, "status_id": "2", "project_id": "",
+         "custom_value1": "P260011"},
+        {"number": "RG4", "date": "2026-10-03", "amount": 400, "status_id": "2", "project_id": "p1",
+         "is_deleted": True},
+    ]
+    assert [r["rechnungsnr"] for r in t.projekt_lesen("P260010")["rechnungen"]] == ["RG1", "RG2"]
 
 
 def test_rechnungen_offen(in_mock):
